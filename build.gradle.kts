@@ -1,9 +1,10 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.maven.publish)
 }
 
 group = "com.overmail"
-version = "1.0-SNAPSHOT"
+version = System.getenv("VERSION")?.ifBlank { null } ?: "unspecified"
 
 repositories {
     mavenCentral()
@@ -25,5 +26,27 @@ kotlin {
     compilerOptions {
         freeCompilerArgs.add("-Xopt-in=kotlin.time.ExperimentalTime")
         freeCompilerArgs.add("-Xopt-in=kotlin.contracts.ExperimentalContracts")
+    }
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            groupId = project.group.toString()
+            artifactId = "mail-client"
+            version = project.version.toString()
+            from(components["kotlin"])
+        }
+    }
+
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/overmail/mail-client")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR")
+                password = System.getenv("GITHUB_TOKEN")
+            }
+        }
     }
 }
