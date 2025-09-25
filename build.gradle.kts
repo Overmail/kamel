@@ -33,7 +33,7 @@ publishing {
     publications {
         create<MavenPublication>("maven") {
             groupId = project.group.toString()
-            artifactId = "mail-client"
+            artifactId = "kamel"
             version = project.version.toString()
             from(components["kotlin"])
         }
@@ -42,7 +42,7 @@ publishing {
     repositories {
         maven {
             name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/overmail/mail-client")
+            url = uri("https://maven.pkg.github.com/overmail/kamel")
             credentials {
                 username = System.getenv("GITHUB_ACTOR")
                 password = System.getenv("GITHUB_TOKEN")
