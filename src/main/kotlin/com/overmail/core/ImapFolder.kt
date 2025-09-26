@@ -23,7 +23,7 @@ class ImapFolder(
     val specialType: SpecialType?
 ) {
     val fullName = this@ImapFolder.path.joinToString(delimiter)
-    val name = fullName.last()
+    val name = path.lastOrNull() ?: fullName
 
     enum class SpecialType {
         INBOX,
