@@ -22,7 +22,9 @@ class ImapFolder(
     val delimiter: String,
     val specialType: SpecialType?
 ) {
-    val name = this@ImapFolder.path.joinToString(delimiter)
+    val fullName = this@ImapFolder.path.joinToString(delimiter)
+    val name = fullName.last()
+
     enum class SpecialType {
         INBOX,
         SENT,
@@ -31,7 +33,7 @@ class ImapFolder(
         DRAFTS
     }
 
-    private val logger = LoggerFactory.getLogger("ImapFolder/$name")
+    private val logger = LoggerFactory.getLogger("ImapFolder/$fullName")
     private var socketInstance: SocketInstance? = null
 
     override fun toString(): String {
