@@ -95,8 +95,6 @@ class ImapFolder(
                 .trim()
                 .split(" ")
 
-            val flags = mutableListOf<String>()
-
             val email = Email(client = this.client)
 
             var i = 0
@@ -104,12 +102,14 @@ class ImapFolder(
                 when (val segment = data[i]) {
                     "FLAGS" -> {
                         // get flags
+                        val flags = email.flagsValue.let { if (it is Optional.Set) it.value.toMutableSet() else mutableSetOf() }
                         flags.addAll(data.joinToString(" ")
                             .substringAfter(data.take(i + 1).joinToString(" "))
                             .substringAfter("(")
                             .substringBefore(")")
                             .split(" "))
                         i += flags.size + 1
+                        email.flagsValue = Optional.Set(flags)
                     }
                     "ENVELOPE" -> {
                         /**
@@ -484,5 +484,14 @@ class Email internal constructor(
         get() = client.coroutineScope.async {
             this@Email.inReplyToValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download inReplyTo")
+        }
+
+    var flagsValue: Optional<Set<String>> = Optional.Empty()
+        internal set
+
+    val flags: Deferred<Set<String>>
+        get() = client.coroutineScope.async {
+            this@Email.flagsValue.let { if (it is Optional.Set) return@async it.value }
+            TODO("Use connection to download flags")
         }
 }
