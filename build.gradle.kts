@@ -3,7 +3,7 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
-group = "com.overmail"
+group = "io.github.julius-babies"
 version = System.getenv("VERSION")?.ifBlank { null } ?: "unspecified"
 
 repositories {
