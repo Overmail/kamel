@@ -468,10 +468,10 @@ class Email internal constructor(
             TODO("Verbindung verwenden, um bcc herunterzuladen")
         }
 
-    var messageIdValue: Optional<String?> = Optional.Empty()
+    var messageIdValue: Optional<String> = Optional.Empty()
         internal set
 
-    val messageId: Deferred<String?>
+    val messageId: Deferred<String>
         get() = client.coroutineScope.async {
             this@Email.messageIdValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download messageId")
