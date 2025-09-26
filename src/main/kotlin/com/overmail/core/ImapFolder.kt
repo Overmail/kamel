@@ -1,6 +1,7 @@
 package com.overmail.core
 
 import com.overmail.util.Optional
+import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -47,9 +48,10 @@ class ImapFolder(
         val response = getSocketInstance().runCommand("SEARCH ALL").response.await().lines()
         val ids = mutableListOf<Int>()
         response.forEach { line ->
-            if (line.startsWith("OK Search")) return ids
-            else if (line.startsWith("SEARCH")) {
-                line.substringAfter("SEARCH ")
+            if (line.uppercase().startsWith("OK SEARCH")) return ids
+            else if (line.uppercase().startsWith("SEARCH")) {
+                line
+                    .substringAfterIgnoreCasing("SEARCH ")
                     .split(" ")
                     .mapNotNull { it.toIntOrNull() }
                     .forEach { ids.add(it) }
@@ -88,7 +90,7 @@ class ImapFolder(
 
         val response = getSocketInstance().runCommand(command.toString()).response.await()
         response.lines().forEach { line ->
-            if (line.startsWith("OK Fetch")) return@forEach
+            if (line.uppercase().startsWith("OK FETCH")) return@forEach
             val data = line
                 .substringAfter("(")
                 .substringBeforeLast(")")
@@ -99,7 +101,7 @@ class ImapFolder(
 
             var i = 0
             while (i < data.size) {
-                when (val segment = data[i]) {
+                when (val segment = data[i].uppercase()) {
                     "FLAGS" -> {
                         // get flags
                         val flags = email.flagsValue.let { if (it is Optional.Set) it.value.toMutableSet() else mutableSetOf() }
@@ -107,7 +109,9 @@ class ImapFolder(
                             .substringAfter(data.take(i + 1).joinToString(" "))
                             .substringAfter("(")
                             .substringBefore(")")
-                            .split(" "))
+                            .split(" ")
+                            .map { Email.Flag.fromString(it) }
+                        )
                         i += flags.size + 1
                         email.flagsValue = Optional.Set(flags)
                     }
@@ -486,12 +490,37 @@ class Email internal constructor(
             TODO("Use connection to download inReplyTo")
         }
 
-    var flagsValue: Optional<Set<String>> = Optional.Empty()
+    var flagsValue: Optional<Set<Flag>> = Optional.Empty()
         internal set
 
-    val flags: Deferred<Set<String>>
+    val flags: Deferred<Set<Flag>>
         get() = client.coroutineScope.async {
             this@Email.flagsValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download flags")
         }
+
+    sealed class Flag {
+        abstract val value: String
+        data object Seen : Flag() { override val value = "\\Seen" }
+        data object Answered : Flag() { override val value = "\\Answered" }
+        data object Flagged : Flag() { override val value = "\\Flagged" }
+        data object Deleted : Flag() { override val value = "\\Deleted" }
+        data object Draft : Flag() { override val value = "\\Draft" }
+        data object Recent : Flag() { override val value = "\\Recent" }
+        data class Other(override val value: String) : Flag()
+
+        companion object {
+            fun fromString(value: String): Flag {
+                return when (value) {
+                    "\\Seen" -> Seen
+                    "\\Answered" -> Answered
+                    "\\Flagged" -> Flagged
+                    "\\Deleted" -> Deleted
+                    "\\Draft" -> Draft
+                    "\\Recent" -> Recent
+                    else -> Other(value)
+                }
+            }
+        }
+    }
 }
