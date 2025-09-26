@@ -1,20 +1,17 @@
 package com.overmail.core
 
+import com.overmail.util.MimeUtility
 import com.overmail.util.Optional
 import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.Month
 import kotlinx.datetime.UtcOffset
-import kotlinx.datetime.format.DayOfWeekNames
 import kotlinx.datetime.format.MonthNames
-import kotlinx.datetime.format.Padding
-import kotlinx.datetime.format.char
 import kotlinx.datetime.toInstant
 import org.slf4j.LoggerFactory
-import java.io.ByteArrayOutputStream
-import kotlin.io.encoding.Base64
 import kotlin.time.Instant
 
 class ImapFolder(
@@ -55,17 +52,17 @@ class ImapFolder(
                     .split(" ")
                     .mapNotNull { it.toIntOrNull() }
                     .forEach { ids.add(it) }
-            }
-            else logger.error("Could not get mail ids: $line")
+            } else logger.error("Could not get mail ids: $line")
         }
         return emptyList()
     }
 
     private suspend fun getSocketInstance(): SocketInstance {
-        if (socketInstance == null || socketInstance?.socket?.isClosed == true) socketInstance = client.createNewSocket().apply {
-            this.login(client.username, client.password)
-            runCommand("SELECT \"${path.joinToString(delimiter)}\"").response.await()
-        }
+        if (socketInstance == null || socketInstance?.socket?.isClosed == true) socketInstance =
+            client.createNewSocket().apply {
+                this.login(client.username, client.password)
+                runCommand("SELECT \"${path.joinToString(delimiter)}\"").response.await()
+            }
         return socketInstance!!
     }
 
@@ -104,17 +101,29 @@ class ImapFolder(
                 when (val segment = data[i].uppercase()) {
                     "FLAGS" -> {
                         // get flags
-                        val flags = email.flagsValue.let { if (it is Optional.Set) it.value.toMutableSet() else mutableSetOf() }
-                        flags.addAll(data.joinToString(" ")
-                            .substringAfter(data.take(i + 1).joinToString(" "))
-                            .substringAfter("(")
-                            .substringBefore(")")
-                            .split(" ")
-                            .map { Email.Flag.fromString(it) }
+                        val flags =
+                            email.flagsValue.let { if (it is Optional.Set) it.value.toMutableSet() else mutableSetOf() }
+
+                        val rawFlagsRegex = Regex("""\((.*?)\)""")
+                        val match = rawFlagsRegex.find(
+                            data.joinToString(" ")
+                                .substringAfter(data.take(i + 1).joinToString(" "))
                         )
+                        if (match == null) {
+                            logger.error(
+                                "Could not parse flags in ${
+                                    data.joinToString(" ").substringAfter(data.take(i + 1).joinToString(" "))
+                                }"
+                            )
+                            i++
+                            continue
+                        }
+                        val rawFlags = match.groupValues[1].split(" ").map { it.trim() }
+                        flags.addAll(rawFlags.mapTo(flags) { Email.Flag.fromString(it) })
                         i += flags.size + 1
                         email.flagsValue = Optional.Set(flags)
                     }
+
                     "ENVELOPE" -> {
                         /**
                          *  The fields of the envelope structure are in the following
@@ -129,153 +138,133 @@ class ImapFolder(
                             .substringAfter(data.take(i + 1).joinToString(" "))
                             .substringAfter("(")
 
-                        /**
-                         * The number of spaces used within the envelope structure. Used to increment i.
-                         */
-                        var spaces = 1
-
-                        remaining = remaining.removePrefix("\"")
-                        val sentAtRaw = remaining.substringBefore("\"")
-                        val dateFormatter = LocalDateTime.Format {
-                            dayOfWeek(DayOfWeekNames("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
-                            chars(", ")
-                            day(Padding.ZERO)
-                            char(' ')
-                            monthName(MonthNames("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
-                            char(' ')
-                            year(Padding.ZERO)
-                            char(' ')
-                            hour(Padding.ZERO)
-                            char(':')
-                            minute(Padding.ZERO)
-                            char(':')
-                            second(Padding.ZERO)
+                        // lade den kompletten envelope in eine variable, zähle die klammern, bis sie wieder ausgeglichen sind
+                        val spaces = run {
+                            var parenCount = 1
+                            buildString {
+                                for (char in remaining) {
+                                    when (char) {
+                                        '(' -> parenCount++
+                                        ')' -> parenCount--
+                                    }
+                                    if (parenCount == 0) break
+                                    append(char)
+                                }
+                            }.count { it == ' ' }
                         }
-                        val date = dateFormatter.parse(sentAtRaw.substringBeforeLast(" "))
-                        val offset = sentAtRaw.substringAfterLast(" ")
-                        // e.g. +0200, -0145
-                        val offsetHours = offset.drop(1).take(2).toInt().let {
-                            if (offset.startsWith('-')) -it else it
+
+
+                        val simpleQuoteRegex = Regex("\"([^\"]*)\"") // matches "content"
+
+                        val rawDate = simpleQuoteRegex.find(remaining)?.groupValues?.get(1)
+                            ?: throw IllegalArgumentException("Could not parse date in $remaining (quoteRegex)")
+
+                        val dateWithOffsetRegex =
+                            Regex("((?<dayofweek>(Mon|Tue|Wed|Thu|Fri|Sat|Sun))(,)? )?(?<dayofmonth>\\d{1,2}) (?<month>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)) (?<year>\\d{4}) (?<hour>\\d{2}):(?<minute>\\d{2}):(?<second>\\d{2}) (?<offset>[+-]\\d{4}|UT)")
+                        val rawDateWithOffset = dateWithOffsetRegex.find(remaining)
+                            ?: throw IllegalArgumentException("Could not parse date in $remaining")
+
+                        val dayOfMonth = rawDateWithOffset.groups["dayofmonth"]!!.value.toInt()
+                        val month =
+                            Month(MonthNames.ENGLISH_ABBREVIATED.names.indexOf(rawDateWithOffset.groups["month"]!!.value) + 1)
+                        val year = rawDateWithOffset.groups["year"]!!.value.toInt()
+                        val hour = rawDateWithOffset.groups["hour"]!!.value.toInt()
+                        val minute = rawDateWithOffset.groups["minute"]!!.value.toInt()
+                        val second = rawDateWithOffset.groups["second"]!!.value.toInt()
+                        val offsetRaw = rawDateWithOffset.groups["offset"]!!.value
+
+                        val offset = when {
+                            offsetRaw == "UT" -> UtcOffset.ZERO
+                            offsetRaw.startsWith("+") || offsetRaw.startsWith("-") -> {
+                                val offsetHours = offsetRaw.drop(1).take(2).toInt().let {
+                                    if (offsetRaw.startsWith('-')) -it else it
+                                }
+                                val offsetMinutes = offsetRaw.drop(3).take(2).toInt()
+                                UtcOffset(offsetHours, offsetMinutes)
+                            }
+
+                            else -> throw IllegalArgumentException("Invalid offset: $offsetRaw")
                         }
-                        val offsetMinutes = offset.drop(3).take(2).toInt()
-                        email.sentAtValue = Optional.Set(date.toInstant(UtcOffset(offsetHours, offsetMinutes)))
 
-                        remaining = remaining.removePrefix("$sentAtRaw\" ")
-                        spaces += sentAtRaw.count { it == ' ' } + 1
+                        remaining = remaining.removePrefix("\"$rawDate\" ")
+                        val date = LocalDateTime(
+                            day = dayOfMonth,
+                            month = month,
+                            year = year,
+                            hour = hour,
+                            minute = minute,
+                            second = second,
+                        )
+                        email.sentAtValue = Optional.Set(date.toInstant(offset))
 
-                        remaining = remaining.removePrefix("\"")
-
-                        val rawSubject: String
                         if (remaining.startsWith("NIL ")) {
-                            rawSubject = "NIL"
                             email.subjectValue = Optional.Set(null)
+                            remaining = remaining.substringAfter("NIL ")
+                        } else {
+                            val subjectRegex = Regex("^(?:\"(?<subject>[^\"]*)\"|NIL) ")
+                            val subjectMatch = subjectRegex.find(remaining)
+                                ?: throw IllegalArgumentException("Could not parse subject in $remaining (subjectRegex)")
+                            val subject = subjectMatch.groups["subject"]?.value
+                            email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
+                            remaining = remaining.removePrefix(subjectMatch.value)
                         }
-                        else {
-                            rawSubject = remaining.substringBefore("\"")
-                            if (rawSubject.startsWith("=?UTF-8?")) {
-                                val utf8Content = rawSubject.substringAfter("?UTF-8?")
-                                email.subjectValue = Optional.Set(if (utf8Content.startsWith("B?")) {
-                                    Base64.decode(utf8Content.substringAfter("?").substringBeforeLast("?=")).decodeToString()
-                                } else if (utf8Content.startsWith("Q?")) {
-                                    decodeQuotedPrintable(utf8Content.substringAfter("?").substringBeforeLast("?="))
-                                } else null)
-                            } else email.subjectValue = Optional.Set(rawSubject)
-                        }
-
-                        remaining = remaining
-                            .removePrefix("\"")
-                            .removePrefix(rawSubject)
-                            .removePrefix("\"")
-                            .removePrefix(" ")
-                        spaces += rawSubject.count { it == ' ' } + 1
 
                         fun handleEmailUsers(remaining: String): Set<EmailUser> {
-                            var remainingUsers = remaining
-                            fun handleSingle(single: String): EmailUser? {
-                                val single = single
-                                    .removePrefix("(")
-                                    .removeSuffix(")")
-                                val regex = Regex("^(?:\"([^\"]+)\"|NIL)\\s+NIL\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"$")
-                                val match = regex.find(single)
-                                if (match != null) {
-                                    val (name, mailbox, host) = match.destructured
-                                    return EmailUser("$mailbox@$host", name.takeIf { it != "NIL" })
-                                } else {
-                                    logger.error("Cannot handle single user $single")
-                                    return null
+                            if (!remaining.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
+
+                            var parenCount = 0
+                            val content = buildString {
+                                for (char in remaining) {
+                                    if (char == '(') parenCount++
+                                    if (char == ')') parenCount--
+                                    append(char)
+                                    if (parenCount == 0) break
                                 }
                             }
 
-                            if (!remainingUsers.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
-                            remainingUsers = remainingUsers.substringAfter("(")
-                            val result = mutableSetOf<EmailUser>()
-                            while (remainingUsers != ")") {
-                                val nextPart = remainingUsers.substringBefore(")") + ")"
-                                val user = handleSingle(nextPart)
-                                user?.let { result.add(it) }
-                                remainingUsers = remainingUsers.removePrefix(nextPart)
+                            val regex = Regex("\\((\"([^\"]+)\"|NIL)\\s+NIL\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\)")
+                            return regex.findAll(content).map { match ->
+                                val (name, _, mailbox, host) = match.destructured
+                                EmailUser("$mailbox@$host", name.takeIf { it != "NIL" })
+                            }.toSet()
+                        }
+
+                        fun parseEmailField(
+                            remaining: String,
+                            getter: () -> Set<EmailUser>?,
+                            setter: (Set<EmailUser>) -> Unit
+                        ): String {
+                            val trimmed = remaining.dropWhile { it == ' ' }
+                            return if (trimmed.startsWith("NIL")) {
+                                setter(emptySet())
+                                trimmed.removePrefix("NIL").dropWhile { it == ' ' }
+                            } else {
+                                val raw = trimmed.substringBefore("))") + "))"
+                                setter((getter() ?: emptySet()) + handleEmailUsers(raw))
+                                trimmed.removePrefix(raw).dropWhile { it == ' ' }
                             }
-                            return result
                         }
 
-                        val rawFrom = remaining.substringBefore("))") + "))"
-                        email.fromValue = Optional.Set((email.fromValue.getOrNull() ?: emptySet()) + handleEmailUsers(rawFrom))
-                        remaining = remaining
-                            .removePrefix(rawFrom)
-                            .dropWhile { it == ' ' }
-                        spaces += rawFrom.count { it == ' ' } + 1
-
-                        val rawSenders = remaining.substringBefore("))") + "))"
-                        email.sendersValue = Optional.Set((email.sendersValue.getOrNull() ?: emptySet()) + handleEmailUsers(rawSenders))
-                        remaining = remaining
-                            .removePrefix(rawSenders)
-                            .dropWhile { it == ' ' }
-                        spaces += rawSenders.count { it == ' ' } + 1
-
-                        val rawReplyTo = remaining.substringBefore("))") + "))"
-                        email.replyToValue = Optional.Set((email.replyToValue.getOrNull() ?: emptySet()) + handleEmailUsers(rawReplyTo))
-                        remaining = remaining
-                            .removePrefix(rawReplyTo)
-                            .dropWhile { it == ' ' }
-                        spaces += rawReplyTo.count { it == ' ' } + 1
-
-                        val recipientsRaw = remaining.substringBefore("))") + "))"
-                        email.toValue = Optional.Set((email.toValue.getOrNull() ?: emptySet()) + handleEmailUsers(recipientsRaw))
-                        remaining = remaining
-                            .removePrefix(recipientsRaw)
-                            .dropWhile { it == ' ' }
-                        spaces += recipientsRaw.count { it == ' ' } + 1
-
-                        if (remaining.startsWith("NIL ")) {
-                            remaining = remaining.substringAfter("NIL ")
-                            spaces += 1
-                            email.ccValue = Optional.Set(emptySet())
-                        } else {
-                            val ccRaw = remaining.substringBefore("))") + "))"
-                            email.ccValue = Optional.Set((email.ccValue.getOrNull() ?: emptySet()) + handleEmailUsers(ccRaw))
-                            remaining = remaining
-                                .removePrefix(rawReplyTo)
-                                .dropWhile { it == ' ' }
-                            spaces += ccRaw.count { it == ' ' } + 1
-                        }
-
-                        if (remaining.startsWith("NIL ")) {
-                            remaining = remaining.substringAfter("NIL ")
-                            spaces += 1
-                            email.bccValue = Optional.Set(emptySet())
-                        } else {
-                            val bccRaw = remaining.substringBefore("))") + "))"
-                            email.bccValue = Optional.Set((email.bccValue.getOrNull() ?: emptySet()) + handleEmailUsers(bccRaw))
-                            remaining = remaining
-                                .removePrefix(rawReplyTo)
-                                .dropWhile { it == ' ' }
-                            spaces += bccRaw.count { it == ' ' } + 1
+                        listOf(
+                            { email.fromValue.getOrNull() } to { v: Set<EmailUser> ->
+                                email.fromValue = Optional.Set(v)
+                            },
+                            { email.sendersValue.getOrNull() } to { v: Set<EmailUser> ->
+                                email.sendersValue = Optional.Set(v)
+                            },
+                            { email.replyToValue.getOrNull() } to { v: Set<EmailUser> ->
+                                email.replyToValue = Optional.Set(v)
+                            },
+                            { email.toValue.getOrNull() } to { v: Set<EmailUser> -> email.toValue = Optional.Set(v) },
+                            { email.ccValue.getOrNull() } to { v: Set<EmailUser> -> email.ccValue = Optional.Set(v) },
+                            { email.bccValue.getOrNull() } to { v: Set<EmailUser> -> email.bccValue = Optional.Set(v) }
+                        ).forEach { (getter, setter) ->
+                            remaining = parseEmailField(remaining, getter, setter)
                         }
 
                         if (remaining.startsWith("NIL ")) {
                             email.inReplyToValue = Optional.Set(null)
                             remaining = remaining.substringAfter("NIL ")
-                            spaces += 1
                         } else {
                             remaining = remaining.removePrefix("\"")
                             remaining = remaining.removePrefix("<")
@@ -285,15 +274,15 @@ class ImapFolder(
                                 .removePrefix(inReplyTo)
                                 .removePrefix(">\"")
                                 .removePrefix(" ")
-                            spaces += 1
                         }
 
                         remaining = remaining.removePrefix("\"<")
                         email.messageIdValue = Optional.Set(remaining.substringBefore(">"))
 
-                        i += spaces + 1
                         emails.add(email)
+                        i += spaces + 2
                     }
+
                     else -> {
                         println("Unknown segment: $segment")
                         i++
@@ -354,7 +343,18 @@ class EmailUser(
     val address: String,
     name: String?
 ) {
-    val name = name?.takeIf { it != "NIL" && it.isNotBlank() }
+    val name = name
+        ?.takeIf { it != "NIL" && it.isNotBlank() }
+        ?.let {
+            if (it.startsWith('"') && it.endsWith('"')) it.drop(1).dropLast(1)
+            else it
+        }
+        ?.let { name -> MimeUtility.decode(name) }
+        ?.let {
+            if (it.startsWith("'") && it.endsWith("'")) it.drop(1).dropLast(1)
+            else it
+        }
+
     override fun toString(): String {
         if (name == null) return address
         return "$name <$address>"
@@ -375,25 +375,6 @@ class EmailUser(
     }
 }
 
-private fun decodeQuotedPrintable(input: String): String {
-    val outputStream = ByteArrayOutputStream()
-    var i = 0
-
-    while (i < input.length) {
-        when (val c = input[i]) {
-            '_' -> outputStream.write(' '.code)
-            '=' if i + 2 < input.length -> {
-                val hex = input.substring(i + 1, i + 3)
-                outputStream.write(hex.toInt(16))
-                i += 2
-            }
-            else -> outputStream.write(c.code)
-        }
-        i++
-    }
-
-    return String(outputStream.toByteArray(), Charsets.UTF_8)
-}
 
 @Suppress("unused")
 class Email internal constructor(
@@ -455,7 +436,7 @@ class Email internal constructor(
         }
 
     var ccValue: Optional<Set<EmailUser>> = Optional.Empty()
-            internal set
+        internal set
 
     val cc: Deferred<Set<EmailUser>>
         get() = client.coroutineScope.async {
@@ -501,12 +482,31 @@ class Email internal constructor(
 
     sealed class Flag {
         abstract val value: String
-        data object Seen : Flag() { override val value = "\\Seen" }
-        data object Answered : Flag() { override val value = "\\Answered" }
-        data object Flagged : Flag() { override val value = "\\Flagged" }
-        data object Deleted : Flag() { override val value = "\\Deleted" }
-        data object Draft : Flag() { override val value = "\\Draft" }
-        data object Recent : Flag() { override val value = "\\Recent" }
+
+        data object Seen : Flag() {
+            override val value = "\\Seen"
+        }
+
+        data object Answered : Flag() {
+            override val value = "\\Answered"
+        }
+
+        data object Flagged : Flag() {
+            override val value = "\\Flagged"
+        }
+
+        data object Deleted : Flag() {
+            override val value = "\\Deleted"
+        }
+
+        data object Draft : Flag() {
+            override val value = "\\Draft"
+        }
+
+        data object Recent : Flag() {
+            override val value = "\\Recent"
+        }
+
         data class Other(override val value: String) : Flag()
 
         companion object {

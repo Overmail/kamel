@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.maven.publish)
@@ -14,6 +16,7 @@ dependencies {
     implementation(libs.kotlinx.datetime)
     implementation(libs.ktor.network)
     implementation(libs.ktor.network.tls)
+    implementation(libs.kotlin.stdlib)
 }
 
 tasks.test {
@@ -24,8 +27,10 @@ kotlin {
     jvmToolchain(24)
 
     compilerOptions {
-        freeCompilerArgs.add("-Xopt-in=kotlin.time.ExperimentalTime")
-        freeCompilerArgs.add("-Xopt-in=kotlin.contracts.ExperimentalContracts")
+        freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
+        freeCompilerArgs.add("-opt-in=kotlin.contracts.ExperimentalContracts")
+
+        jvmTarget = JvmTarget.JVM_24
     }
 }
 
