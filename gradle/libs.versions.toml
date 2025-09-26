@@ -10,4 +10,4 @@ ktor-network-tls = { module = "io.ktor:ktor-network-tls", version.ref = "ktor" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-maven-publish = { id = "maven-publish" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.34.0" }

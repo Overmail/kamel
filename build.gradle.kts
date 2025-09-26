@@ -29,24 +29,41 @@ kotlin {
     }
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            groupId = project.group.toString()
-            artifactId = "kamel"
-            version = project.version.toString()
-            from(components["kotlin"])
-        }
-    }
+val sourcesJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("sources")
+    from(sourceSets.main.get().allSource)
+}
 
-    repositories {
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/overmail/kamel")
-            credentials {
-                username = System.getenv("GITHUB_ACTOR")
-                password = System.getenv("GITHUB_TOKEN")
+mavenPublishing {
+    publishToMavenCentral()
+    signAllPublications()
+    coordinates(project.group.toString(), project.name, project.version.toString())
+
+    pom {
+        name = "Kamel"
+        description = "Kotlin Asynchronous Mail Library"
+        url = "https://github.com/Overmail/kamel"
+        inceptionYear = "2025"
+        licenses {
+            license {
+                name = "GPL-3.0"
+                url = "https://www.gnu.org/licenses/gpl-3.0.en.html"
             }
+        }
+
+        developers {
+            developer {
+                id = "julius-vincent-babies"
+                name = "Julius Vincent Babies"
+                email = "julvin.babies@gmail.com"
+                url = "https://github.com/Julius-Babies"
+            }
+        }
+
+        scm {
+            url = "https://github.com/Overmail/kamel"
+            connection = "scm:git:git://github.com/Overmail/kamel.git"
+            developerConnection = "scm:git:ssh://git@github.com/Overmail/kamel.git"
         }
     }
 }
