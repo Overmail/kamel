@@ -33,6 +33,17 @@ class ImapClient : AutoCloseable {
         this.coroutineScope = config.scope
     }
 
+    @Suppress("unused")
+    constructor(config: ImapClientConfig) {
+        this.host = config.host
+        this.port = config.port
+        this.ssl = config.ssl
+        this.auth = config.auth
+        this.username = config.username
+        this.password = config.password
+        this.coroutineScope = config.scope
+    }
+
     suspend fun connect() {
         this.socket?.socket?.close()
         this.socket = createNewSocket()
