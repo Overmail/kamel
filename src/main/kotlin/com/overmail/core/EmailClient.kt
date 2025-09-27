@@ -132,15 +132,49 @@ data class SocketInstance(
 ) {
     private var lastCommandId: Int = 0
     private val messages = mutableListOf<ImapMessage>()
+    private val commandMutex = kotlinx.coroutines.sync.Mutex()
 
     suspend fun runCommand(command: String): ImapMessage {
         isReady.await()
-        val commandId = lastCommandId++
-        val commandIdString = "A${commandId.toString().padStart(3, '0')}"
-        val message = ImapMessage(commandIdString, command, false)
-        messages.add(message)
-        this.output.writeStringUtf8("$commandIdString $command\r\n")
-        return message
+        // Ensure commands do not overlap
+        commandMutex.lock()
+        try {
+            val commandId = lastCommandId++
+            val commandIdString = "A${commandId.toString().padStart(3, '0')}"
+            val message = ImapMessage(commandIdString, command, false, accumulate = true, onLine = null, onLiteral = null) {
+                // Release when finished
+                if (commandMutex.isLocked) commandMutex.unlock()
+            }
+            messages.add(message)
+            this.output.writeStringUtf8("$commandIdString $command\r\n")
+            return message
+        } catch (t: Throwable) {
+            if (commandMutex.isLocked) commandMutex.unlock()
+            throw t
+        }
+    }
+
+    // Stream with literal support
+    suspend fun runCommandStreamWithLiterals(
+        command: String,
+        onLine: (String) -> Unit,
+        onLiteral: (ByteArray) -> Unit
+    ): ImapMessage {
+        isReady.await()
+        commandMutex.lock()
+        try {
+            val commandId = lastCommandId++
+            val commandIdString = "A${commandId.toString().padStart(3, '0')}"
+            val message = ImapMessage(commandIdString, command, false, accumulate = false, onLine = onLine, onLiteral = onLiteral) {
+                if (commandMutex.isLocked) commandMutex.unlock()
+            }
+            messages.add(message)
+            this.output.writeStringUtf8("$commandIdString $command\r\n")
+            return message
+        } catch (t: Throwable) {
+            if (commandMutex.isLocked) commandMutex.unlock()
+            throw t
+        }
     }
 
     val isReady = CompletableDeferred<Unit>()
@@ -155,9 +189,17 @@ data class SocketInstance(
 
                 if (line.startsWith(lastUnfinishedMessage.id + " OK") || line.startsWith("* ")) {
                     val data = line.substringAfter(" ")
-                    lastUnfinishedMessage.content
-                        .apply { if (this.isNotEmpty()) this.append("\n") }
-                        .append(data)
+                    lastUnfinishedMessage.handleLine(data)
+                    // Detect IMAP literal marker at end of line and read exact octets
+                    val m = Regex("\\{(\\d+)}\\s*$").find(data)
+                    if (m != null) {
+                        val size = m.groupValues[1].toInt()
+                        if (size > 0) {
+                            val bytes = ByteArray(size)
+                            this@SocketInstance.input.readFully(bytes, 0, size)
+                            lastUnfinishedMessage.handleLiteral(bytes)
+                        }
+                    }
                     if (line.startsWith(lastUnfinishedMessage.id + " OK")) lastUnfinishedMessage.done()
                 }
             }
@@ -173,17 +215,44 @@ data class SocketInstance(
 class ImapMessage(
     val id: String,
     val command: String,
-    var isFinished: Boolean
+    var isFinished: Boolean,
+    private val accumulate: Boolean = true,
+    private val onLine: ((String) -> Unit)? = null,
+    private val onLiteral: ((ByteArray) -> Unit)? = null,
+    private val onDone: (() -> Unit)? = null
 ) {
     val response: CompletableDeferred<String> = CompletableDeferred()
-    var content = StringBuilder()
+    private val contentBuilder = StringBuilder()
+    val content: CharSequence
+        get() = contentBuilder
+
+    fun handleLine(data: String) {
+        // Stream out immediately if a callback is provided
+        onLine?.invoke(data)
+        // Accumulate only when requested
+        if (accumulate) {
+            if (contentBuilder.isNotEmpty()) contentBuilder.append("\n")
+            contentBuilder.append(data)
+        }
+    }
+
+    fun handleLiteral(bytes: ByteArray) {
+        onLiteral?.invoke(bytes)
+        if (accumulate) {
+            // If accumulating, append a placeholder note about literal length to preserve structure
+            if (contentBuilder.isNotEmpty()) contentBuilder.append("\n")
+            contentBuilder.append("<literal ${'$'}{bytes.size} bytes>")
+        }
+    }
 
     fun done() {
         isFinished = true
-        response.complete(content.lines().joinToString("\n"))
+        // Complete with the aggregated content if we accumulated, otherwise with an empty string
+        response.complete(if (accumulate) contentBuilder.lines().joinToString("\n") else "")
+        onDone?.invoke()
     }
 
     override fun toString(): String {
-        return "[$id] $command --> $content; finished: $isFinished"
+        return "[$id] $command --> $contentBuilder; finished: $isFinished"
     }
 }

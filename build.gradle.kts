@@ -17,6 +17,7 @@ dependencies {
     implementation(libs.ktor.network)
     implementation(libs.ktor.network.tls)
     implementation(libs.kotlin.stdlib)
+    implementation(libs.jakarta.mail)
 
     testImplementation(libs.logback.classic)
 }
@@ -30,6 +31,7 @@ kotlin {
 
     compilerOptions {
         freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
+        freeCompilerArgs.add("-Xcontext-parameters")
         freeCompilerArgs.add("-opt-in=kotlin.contracts.ExperimentalContracts")
 
         jvmTarget = JvmTarget.JVM_24

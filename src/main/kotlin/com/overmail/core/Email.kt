@@ -47,6 +47,22 @@ class EmailUser(
 class Email internal constructor(
     private val client: ImapClient
 ) {
+    // Wird von ImapFolder gesetzt, um Inhalte on-demand zu laden
+    internal var contentLoader: (suspend (Long) -> EmailContent)? = null
+
+    // Inhalt der E-Mail (Rohinhalt, Text, HTML, Anhänge)
+    var contentValue: Optional<EmailContent> = Optional.Empty()
+        internal set
+
+    val content: Deferred<EmailContent>
+        get() = client.coroutineScope.async {
+            this@Email.contentValue.let { if (it is Optional.Set) return@async it.value }
+            val uid = this@Email.uidValue.getOrNull()
+                ?: throw IllegalStateException("UID ist nicht verfügbar – Inhalte können nicht geladen werden")
+            val loader = this@Email.contentLoader
+                ?: throw IllegalStateException("Kein Content-Loader gesetzt – Inhalte können nicht geladen werden")
+            loader(uid)
+        }
     var subjectValue: Optional<String?> = Optional.Empty()
         internal set
 

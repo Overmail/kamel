@@ -2,15 +2,21 @@ package com.overmail.core
 
 import com.overmail.util.MimeUtility
 import com.overmail.util.Optional
+import com.overmail.util.mapAsync
 import com.overmail.util.sha1
 import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
+import jakarta.mail.Session
+import jakarta.mail.internet.MimeMessage
+import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.Month
 import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.format.MonthNames
 import kotlinx.datetime.toInstant
 import org.slf4j.LoggerFactory
+import java.io.ByteArrayInputStream
+import java.io.InputStream
 
 class ImapFolder(
     private val client: ImapClient,
@@ -116,7 +122,7 @@ class ImapFolder(
         response.lines().forEach { line ->
             if (line.uppercase().startsWith("OK FETCH")) return@forEach
 
-            val email = Email(client = this.client)
+            val email = Email(client = this.client).also { it.contentLoader = { uid -> this@ImapFolder.getEmailContentByUid(uid) } }
             var consuming = line
                 .substringAfter("(")
                 .substringBeforeLast(")")
@@ -342,6 +348,124 @@ class ImapFolder(
         }
 
         return emails
+    }
+
+    /**
+     * Liefert einen on-demand EmailContent für die Nachricht mit der angegebenen UID.
+     * Streams werden erst beim Zugriff geladen (es wird jeweils einmal vom Server gelesen).
+     */
+    fun getEmailContentByUid(uid: Long): EmailContent {
+        // Helper: fetch raw RFC822 as ByteArray (one-shot) using the shared socket with streaming literals
+        suspend fun fetchRaw(): ByteArray {
+            val baos = java.io.ByteArrayOutputStream()
+            val socket = getSocketInstance()
+            val msg = socket.runCommandStreamWithLiterals(
+                command = "UID FETCH $uid BODY.PEEK[]",
+                onLine = { /* ignore */ },
+                onLiteral = { bytes -> baos.write(bytes) }
+            )
+            // Wait until the server finishes the tagged response
+            msg.response.await()
+            return baos.toByteArray()
+        }
+
+        // Lazy parse helpers using Jakarta Mail (on demand, each call refetches raw)
+        fun parseForText(which: String): () -> InputStream {
+            return {
+                val raw = kotlinx.coroutines.runBlocking { fetchRaw() }
+                val props = java.util.Properties()
+                val session = Session.getInstance(props)
+                val msg = MimeMessage(session, ByteArrayInputStream(raw))
+                val result = java.io.ByteArrayOutputStream()
+                fun handle(part: jakarta.mail.Part) {
+                    when {
+                        part.isMimeType("text/plain") && which == "text" -> {
+                            val input = part.inputStream
+                            val buf = ByteArray(8192)
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n == -1) break
+                                result.write(buf, 0, n)
+                            }
+                        }
+                        part.isMimeType("text/html") && which == "html" -> {
+                            val input = part.inputStream
+                            val buf = ByteArray(8192)
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n == -1) break
+                                result.write(buf, 0, n)
+                            }
+                        }
+                        part.isMimeType("multipart/*") -> {
+                            val mp = part.content as jakarta.mail.internet.MimeMultipart
+                            for (i in 0 until mp.count) handle(mp.getBodyPart(i))
+                        }
+                    }
+                }
+                handle(msg)
+                ByteArrayInputStream(result.toByteArray())
+            }
+        }
+
+        suspend fun attachmentsSupplier(): List<EmailAttachment> {
+            return coroutineScope {
+                // Build a list of attachment names and provide suppliers that refetch and extract by index path
+                val raw = fetchRaw()
+                val props = java.util.Properties()
+                val session = Session.getInstance(props)
+                val msg = MimeMessage(session, raw.inputStream())
+
+                data class Path(val indices: List<Int>)
+                data class Meta(val name: String, val path: Path)
+
+                val metas = mutableListOf<Meta>()
+
+                fun walk(part: jakarta.mail.Part, pathIndices: List<Int>) {
+                    if (part.isMimeType("multipart/*")) {
+                        val mp = part.content as jakarta.mail.internet.MimeMultipart
+                        for (i in 0 until mp.count) {
+                            walk(mp.getBodyPart(i), pathIndices + i)
+                        }
+                    } else {
+                        val disp = part.disposition
+                        val filename = part.fileName
+                        val isAttachment = disp?.equals(jakarta.mail.Part.ATTACHMENT, ignoreCase = true) == true ||
+                                (!part.isMimeType("text/plain") && !part.isMimeType("text/html") && filename != null)
+                        if (isAttachment && filename != null) {
+                            metas.add(Meta(jakarta.mail.internet.MimeUtility.decodeText(filename), Path(pathIndices)))
+                        }
+                    }
+                }
+                walk(msg, emptyList())
+
+                return@coroutineScope metas.mapAsync { meta ->
+                    EmailAttachment(meta.name) {
+                        val rawAgain = fetchRaw()
+                        val session2 = Session.getInstance(java.util.Properties())
+                        val msg2 = MimeMessage(session2, rawAgain.inputStream())
+
+                        fun resolve(part: jakarta.mail.Part, indices: List<Int>): jakarta.mail.Part {
+                            if (indices.isEmpty()) return part
+                            val mp = (part.content as jakarta.mail.internet.MimeMultipart)
+                            val next = mp.getBodyPart(indices.first())
+                            return resolve(next, indices.drop(1))
+                        }
+
+                        val target = resolve(msg2, meta.path.indices)
+                        val bytes = target.inputStream.readAllBytes()
+                        ByteArrayInputStream(bytes)
+                    }
+                }.toList()
+            }
+        }
+
+        return EmailContent(
+            rawStream = { ByteArrayInputStream(fetchRaw()) },
+            textStream = parseForText("text"),
+            htmlStream = parseForText("html"),
+            attachmentsSupplier = { attachmentsSupplier() }
+        )
     }
 }
 

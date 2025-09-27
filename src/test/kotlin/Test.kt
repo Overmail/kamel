@@ -19,7 +19,7 @@ fun main() {
             }.use { client ->
                 client.login()
                 client.getFolders()
-                    .filter { it.fullName == "Sent Items" }
+                    .filter { it.fullName == "INBOX" }
                     .forEach { folder ->
                         println(folder.fullName)
                         println()
@@ -28,10 +28,10 @@ fun main() {
                             flags = true
                             uid = true
                             dumpMailOnError = true
-                            //getAll()
-                            getUid(231)
+                            getAll()
                         }.forEach { email ->
                             email.print()
+                            email.content.await().htmlStream!!().readBytes().toString(Charsets.UTF_8).let { println(it) }
                         }
                         println("=".repeat(20))
                     }
