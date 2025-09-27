@@ -26,9 +26,10 @@ fun main() {
                         folder.getMails {
                             envelope = true
                             flags = true
+                            uid = true
                             getAll()
                         }.forEach { email ->
-                            println("${email.from.await().joinToString()} (reply to ${email.replyTo.await().joinToString()}) -> ${email.to.await().joinToString()} ${email.sentAt.await().epochSeconds} ${email.subject.await()}")
+                            println("${email.uid.await()}: ${email.from.await().joinToString()} (reply to ${email.replyTo.await().joinToString()}) -> ${email.to.await().joinToString()} ${email.sentAt.await().epochSeconds} ${email.subject.await()}")
                         }
                         println("=".repeat(20))
                     }

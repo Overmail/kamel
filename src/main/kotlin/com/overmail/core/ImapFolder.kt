@@ -6,6 +6,7 @@ import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.Month
 import kotlinx.datetime.UtcOffset
@@ -122,6 +123,17 @@ class ImapFolder(
                         flags.addAll(rawFlags.mapTo(flags) { Email.Flag.fromString(it) })
                         i += flags.size + 1
                         email.flagsValue = Optional.Set(flags)
+                    }
+
+                    "UID" -> {
+                        val uid = data.getOrNull(i + 1)?.toLongOrNull()
+                        if (uid == null) {
+                            logger.error("Could not parse UID in ${data.joinToString(" ").substringAfter(data.take(i + 1).joinToString(" "))}")
+                            i++
+                            continue
+                        }
+                        email.uidValue = Optional.Set(uid)
+                        i += 2
                     }
 
                     "ENVELOPE" -> {
@@ -469,6 +481,15 @@ class Email internal constructor(
         get() = client.coroutineScope.async {
             this@Email.inReplyToValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download inReplyTo")
+        }
+
+    var uidValue: Optional<Long> = Optional.Empty()
+        internal set
+
+    val uid: Deferred<Long>
+        get() = client.coroutineScope.async {
+            this@Email.uidValue.let { if (it is Optional.Set) return@async it.value }
+            TODO("Use connection to download uid")
         }
 
     var flagsValue: Optional<Set<Flag>> = Optional.Empty()
