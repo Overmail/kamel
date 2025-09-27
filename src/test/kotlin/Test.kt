@@ -19,7 +19,7 @@ fun main() {
             }.use { client ->
                 client.login()
                 client.getFolders()
-                    .filter { it.fullName == "Archiv.Systeme" }
+                    .filter { it.fullName == "Archiv.Nachrichten" }
                     .forEach { folder ->
                         println(folder.fullName)
                         println()
@@ -27,9 +27,16 @@ fun main() {
                             envelope = true
                             flags = true
                             uid = true
-                            getAll()
+                            getId(699)
                         }.forEach { email ->
-                            println("${email.uid.await()}: ${email.from.await().joinToString()} (reply to ${email.replyTo.await().joinToString()}) -> ${email.to.await().joinToString()} ${email.sentAt.await().epochSeconds} ${email.subject.await()}")
+                            println(email.uid.await().toString() + ": " + (email.subject.await() ?: "<no subject>"))
+                            println("    From: " + email.from.await().joinToString(", ") { it.toString() })
+                            println("    Sender: " + email.senders.await().joinToString(", ") { it.toString() })
+                            println("    To: " + email.to.await().joinToString(", ") { it.toString() })
+                            println("    Cc: " + email.cc.await().joinToString(", ") { it.toString() })
+                            println("    Bcc: " + email.bcc.await().joinToString(", ") { it.toString() })
+                            println("    Date: " + email.sentAt.await())
+                            println("    Flags: " + email.flags.await().joinToString(", ") { it.value })
                         }
                         println("=".repeat(20))
                     }

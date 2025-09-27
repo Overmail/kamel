@@ -145,35 +145,33 @@ class ImapFolder(
                          *  structures.
                          * @see <a href="https://www.rfc-editor.org/rfc/rfc3501#section-2.3.5">RFC 3501 - 2.3.5. ENVELOPE</a>
                          */
-                        var remaining = data.joinToString(" ")
-                            .substringAfter(data.take(i + 1).joinToString(" "))
-                            .substringAfter("(")
-
-                        // lade den kompletten envelope in eine variable, zähle die klammern, bis sie wieder ausgeglichen sind
-                        val spaces = run {
-                            var parenCount = 1
-                            buildString {
-                                for (char in remaining) {
-                                    when (char) {
-                                        '(' -> parenCount++
-                                        ')' -> parenCount--
-                                    }
-                                    if (parenCount == 0) break
-                                    append(char)
+                        var envelopeConsuming = run {
+                            val segments = data.drop(i + 1)
+                            var parenthesisCount = 0
+                            var endIndex = 0
+                            segments.forEachIndexed { index, segment ->
+                                if (segment == "(") parenthesisCount++
+                                if (segment == ")") parenthesisCount--
+                                if (parenthesisCount == 0) {
+                                    endIndex = index
                                 }
-                            }.count { it == ' ' }
+                            }
+                            segments.take(endIndex-1)
+                                .joinToString(" ")
+                                .removePrefix("(")
+                                .removeSuffix(")")
                         }
-
+                        val spaces = envelopeConsuming.count { it == ' ' }
 
                         val simpleQuoteRegex = Regex("\"([^\"]*)\"") // matches "content"
 
-                        val rawDate = simpleQuoteRegex.find(remaining)?.groupValues?.get(1)
-                            ?: throw IllegalArgumentException("Could not parse date in $remaining (quoteRegex)")
+                        val rawDate = simpleQuoteRegex.find(envelopeConsuming)?.groupValues?.get(1)
+                            ?: throw IllegalArgumentException("Could not parse date in $envelopeConsuming (quoteRegex)")
 
                         val dateWithOffsetRegex =
                             Regex("((?<dayofweek>(Mon|Tue|Wed|Thu|Fri|Sat|Sun))(,)? )?(?<dayofmonth>\\d{1,2}) (?<month>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)) (?<year>\\d{4}) (?<hour>\\d{2}):(?<minute>\\d{2}):(?<second>\\d{2}) (?<offset>[+-]\\d{4}|UT|GMT)")
-                        val rawDateWithOffset = dateWithOffsetRegex.find(remaining)
-                            ?: throw IllegalArgumentException("Could not parse date in $remaining")
+                        val rawDateWithOffset = dateWithOffsetRegex.find(envelopeConsuming)
+                            ?: throw IllegalArgumentException("Could not parse date in $envelopeConsuming")
 
                         val dayOfMonth = rawDateWithOffset.groups["dayofmonth"]!!.value.toInt()
                         val month =
@@ -198,7 +196,7 @@ class ImapFolder(
                             else -> throw IllegalArgumentException("Invalid offset: $offsetRaw")
                         }
 
-                        remaining = remaining.removePrefix("\"$rawDate\" ")
+                        envelopeConsuming = envelopeConsuming.removePrefix("\"$rawDate\" ")
                         val date = LocalDateTime(
                             day = dayOfMonth,
                             month = month,
@@ -210,8 +208,8 @@ class ImapFolder(
                         email.sentAtValue = Optional.Set(date.toInstant(offset))
 
                         val subjectRegex = Regex("^(?:\"((?:[^\"\\\\]|\\\\.)*)\"|NIL) ")
-                        val subjectMatch = subjectRegex.find(remaining)
-                            ?: throw IllegalArgumentException("Could not parse subject in $remaining (subjectRegex)")
+                        val subjectMatch = subjectRegex.find(envelopeConsuming)
+                            ?: throw IllegalArgumentException("Could not parse subject in $envelopeConsuming (subjectRegex)")
 
                         val subjectRaw = subjectMatch.groups[1]?.value
                         val subject = subjectRaw
@@ -219,14 +217,14 @@ class ImapFolder(
                             ?.replace("\\\\", "\\")
 
                         email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
-                        remaining = remaining.removePrefix(subjectMatch.value)
+                        envelopeConsuming = envelopeConsuming.removePrefix(subjectMatch.value)
 
-                        fun handleEmailUsers(remaining: String): Set<EmailUser> {
-                            if (!remaining.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
+                        fun handleEmailUsers(envelopeConsuming: String): Set<EmailUser> {
+                            if (!envelopeConsuming.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
 
                             var parenCount = 0
                             val content = buildString {
-                                for (char in remaining) {
+                                for (char in envelopeConsuming) {
                                     if (char == '(') parenCount++
                                     if (char == ')') parenCount--
                                     append(char)
@@ -242,11 +240,11 @@ class ImapFolder(
                         }
 
                         fun parseEmailField(
-                            remaining: String,
+                            envelopeConsuming: String,
                             getter: () -> Set<EmailUser>?,
                             setter: (Set<EmailUser>) -> Unit
                         ): String {
-                            val trimmed = remaining.dropWhile { it == ' ' }
+                            val trimmed = envelopeConsuming.dropWhile { it == ' ' }
                             return if (trimmed.startsWith("NIL")) {
                                 setter(emptySet())
                                 trimmed.removePrefix("NIL").dropWhile { it == ' ' }
@@ -271,25 +269,29 @@ class ImapFolder(
                             { email.ccValue.getOrNull() } to { v: Set<EmailUser> -> email.ccValue = Optional.Set(v) },
                             { email.bccValue.getOrNull() } to { v: Set<EmailUser> -> email.bccValue = Optional.Set(v) }
                         ).forEach { (getter, setter) ->
-                            remaining = parseEmailField(remaining, getter, setter)
+                            envelopeConsuming = parseEmailField(envelopeConsuming, getter, setter)
                         }
 
-                        if (remaining.startsWith("NIL ")) {
+                        if (envelopeConsuming.startsWith("NIL ")) {
                             email.inReplyToValue = Optional.Set(null)
-                            remaining = remaining.substringAfter("NIL ")
+                            envelopeConsuming = envelopeConsuming.substringAfter("NIL ")
                         } else {
-                            remaining = remaining.removePrefix("\"")
-                            remaining = remaining.removePrefix("<")
-                            val inReplyTo = remaining.substringBefore(">")
+                            envelopeConsuming = envelopeConsuming.removePrefix("\"")
+                            envelopeConsuming = envelopeConsuming.removePrefix("<")
+                            val inReplyTo = envelopeConsuming.substringBefore(">")
                             email.inReplyToValue = Optional.Set(inReplyTo)
-                            remaining = remaining
+                            envelopeConsuming = envelopeConsuming
                                 .removePrefix(inReplyTo)
                                 .removePrefix(">\"")
                                 .removePrefix(" ")
                         }
 
-                        remaining = remaining.removePrefix("\"<")
-                        email.messageIdValue = Optional.Set(remaining.substringBefore(">"))
+                        val messageIdRaw = simpleQuoteRegex.find(envelopeConsuming)?.value!!
+                        email.messageIdValue = Optional.Set(
+                            messageIdRaw
+                                .removePrefix("\"<")
+                                .removeSuffix(">\"")
+                        )
 
                         emails.add(email)
                         i += spaces + 2
