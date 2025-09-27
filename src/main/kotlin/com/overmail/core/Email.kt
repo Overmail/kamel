@@ -210,6 +210,7 @@ class Email internal constructor(
         println("    Date: ${this.sentAt.await()}")
         println("    Flags: ${this.flags.await().joinToString(", ") { it.value }}")
         println("    In-Reply-To: ${this.inReplyTo.await() ?: "<none>"}")
+        println("    Message-ID: ${this.messageId.await()}")
     }
 
     override fun toString(): String {
@@ -223,6 +224,7 @@ class Email internal constructor(
             appendLine("    Date: ${this@Email.sentAtValue}")
             appendLine("    Flags: ${this@Email.flagsValue}")
             appendLine("    In-Reply-To: ${this@Email.inReplyToValue}")
+            appendLine("    Message-ID: ${this@Email.messageIdValue}")
         }
     }
 }

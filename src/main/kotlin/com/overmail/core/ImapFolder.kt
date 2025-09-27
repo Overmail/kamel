@@ -2,6 +2,7 @@ package com.overmail.core
 
 import com.overmail.util.MimeUtility
 import com.overmail.util.Optional
+import com.overmail.util.sha1
 import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
 import kotlinx.datetime.LocalDateTime
@@ -63,6 +64,21 @@ class ImapFolder(
         return socketInstance!!
     }
 
+    suspend fun getIdByUid(uid: Long): Int? {
+        val response = getSocketInstance().runCommand("SEARCH UID $uid").response.await().lines()
+        response.forEach { line ->
+            if (line.uppercase().startsWith("OK SEARCH")) return null
+            else if (line.uppercase().startsWith("SEARCH")) {
+                val id = line
+                    .substringAfterIgnoreCasing("SEARCH ")
+                    .split(" ")
+                    .firstNotNullOfOrNull { it.toIntOrNull() }
+                return id
+            } else logger.error("Could not get mail id by uid: $line")
+        }
+        return null
+    }
+
     suspend fun getMails(config: FetchRequest.() -> Unit): List<Email> {
         val config = FetchRequest().apply(config)
         val mailIds = getMailIds()
@@ -70,12 +86,26 @@ class ImapFolder(
 
         val emails = mutableListOf<Email>()
 
-        val to = config.to.let { to ->
-            if (to == Long.MAX_VALUE) "*" else to.toString()
+        val from = when (val selection = config.selection) {
+            is FetchRequest.EmailSelection.Id -> {
+                mailIds.firstOrNull { it >= selection.from } ?: return emptyList()
+            }
+            is FetchRequest.EmailSelection.Uid -> {
+                val id = getIdByUid(selection.uid) ?: return emptyList()
+                if (id !in mailIds) return emptyList()
+                id
+            }
+        }
+
+        val to = when (val selection = config.selection) {
+            is FetchRequest.EmailSelection.Id -> {
+                mailIds.lastOrNull { it <= selection.to } ?: return emptyList()
+            }
+            is FetchRequest.EmailSelection.Uid -> from
         }
 
         val command = StringBuilder()
-        command.append("FETCH ${config.from}:${to} (")
+        command.append("FETCH ${from}:${to} (")
         if (config.flags) command.append("FLAGS ")
         if (config.envelope) command.append("ENVELOPE ")
         if (config.uid) command.append("UID ")
@@ -271,15 +301,23 @@ class ImapFolder(
                                 .removePrefix(" ")
                         }
 
-                        val messageIdRaw = simpleQuoteRegex.find(consuming)?.value!!
-                        email.messageIdValue = Optional.Set(
-                            messageIdRaw
-                                .removePrefix("\"<")
-                                .removeSuffix(">\"")
-                        )
+                        if (consuming.startsWith("NIL")) {
+                            email.messageIdValue = Optional.Set("overmail-generated-id:" + ("${date.toInstant(offset).toEpochMilliseconds()}$subject${email.inReplyTo.await()}${email.from.await().map { it.address }.sorted().distinct().joinToString("")}").sha1())
+                            consuming = consuming
+                                .substringAfter("NIL")
+                                .trimStart()
+                        } else {
+                            val messageIdRaw = simpleQuoteRegex.find(consuming)?.value!!
+                            email.messageIdValue = Optional.Set(
+                                messageIdRaw
+                                    .removePrefix("\"<")
+                                    .removeSuffix(">\"")
+                            )
+                            consuming = consuming
+                                .removePrefix(messageIdRaw)
+                        }
 
                         consuming = consuming
-                            .removePrefix(messageIdRaw)
                             .removePrefix(")")
                             .trim()
 
@@ -287,7 +325,7 @@ class ImapFolder(
                         continue
                     }
 
-                    throw IllegalArgumentException("Could not parse FETCH response: $line (remaining: $consuming)")
+                    throw IllegalArgumentException("Could not parse FETCH response")
                 }
             } catch (e: Exception) {
                 logger.error(buildString {
@@ -312,8 +350,7 @@ class FetchRequest {
     var envelope = false
     var flags = false
     var uid = false
-    var from = 1L
-    var to = Long.MAX_VALUE
+    internal var selection: EmailSelection = EmailSelection.Id(1, Long.MAX_VALUE)
 
     /**
      * If true, details of the email will be shown before the stacktrace. This may include sensitive data like email content.
@@ -325,8 +362,11 @@ class FetchRequest {
      * Request a single message by id.
      */
     fun getId(id: Long) {
-        from = id
-        to = id
+        selection = EmailSelection.Id(id, id)
+    }
+
+    fun getUid(uid: Long) {
+        selection = EmailSelection.Uid(uid)
     }
 
 
@@ -334,16 +374,17 @@ class FetchRequest {
      * Request messages in the given id range (inclusive).
      */
     fun getIds(ids: List<Long>) {
-        from = ids.minOrNull() ?: 1L
-        to = ids.maxOrNull() ?: 1L
+        selection = EmailSelection.Id(
+            from = ids.minOrNull() ?: 1L,
+            to = ids.maxOrNull() ?: 1L
+        )
     }
 
     /**
      * Request all messages.
      */
     fun getAll() {
-        from = 1L
-        to = Long.MAX_VALUE
+        selection = EmailSelection.Id(1L, Long.MAX_VALUE)
     }
 
     /**
@@ -353,6 +394,11 @@ class FetchRequest {
         flags = true
         envelope = true
         uid = true
+    }
+
+    internal sealed class EmailSelection {
+        data class Id(val from: Long, val to: Long): EmailSelection()
+        data class Uid(val uid: Long): EmailSelection()
     }
 }
 
