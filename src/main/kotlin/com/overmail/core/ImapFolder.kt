@@ -263,12 +263,11 @@ class ImapFolder(
                             consuming = consuming.substringAfter("NIL ")
                         } else {
                             consuming = consuming.removePrefix("\"")
-                            consuming = consuming.removePrefix("<")
-                            val inReplyTo = consuming.substringBefore(">")
+                            val inReplyTo = consuming.substringBefore("\"")
                             email.inReplyToValue = Optional.Set(inReplyTo)
                             consuming = consuming
                                 .removePrefix(inReplyTo)
-                                .removePrefix(">\"")
+                                .removePrefix("\"")
                                 .removePrefix(" ")
                         }
 

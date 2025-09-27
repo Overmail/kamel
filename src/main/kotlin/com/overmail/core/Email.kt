@@ -209,6 +209,7 @@ class Email internal constructor(
         println("    Bcc: ${this.bcc.await().joinToString(", ") { it.toString() }}")
         println("    Date: ${this.sentAt.await()}")
         println("    Flags: ${this.flags.await().joinToString(", ") { it.value }}")
+        println("    In-Reply-To: ${this.inReplyTo.await() ?: "<none>"}")
     }
 
     override fun toString(): String {
@@ -221,6 +222,7 @@ class Email internal constructor(
             appendLine("    Bcc: ${this@Email.bccValue}")
             appendLine("    Date: ${this@Email.sentAtValue}")
             appendLine("    Flags: ${this@Email.flagsValue}")
+            appendLine("    In-Reply-To: ${this@Email.inReplyToValue}")
         }
     }
 }
