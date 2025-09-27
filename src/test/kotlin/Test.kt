@@ -19,7 +19,7 @@ fun main() {
             }.use { client ->
                 client.login()
                 client.getFolders()
-                    .filter { it.fullName == "Archiv.Nachrichten" }
+                    .filter { it.fullName == "Archiv.Bestellungen, Zahlungen" }
                     .forEach { folder ->
                         println(folder.fullName)
                         println()
@@ -29,7 +29,7 @@ fun main() {
                             uid = true
                             dumpMailOnError = true
                             //getAll()
-                            getId(10)
+                            getId(1)
                         }.forEach { email ->
                             email.print()
                         }

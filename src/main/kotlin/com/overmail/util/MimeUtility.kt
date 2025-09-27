@@ -6,6 +6,21 @@ import kotlin.io.encoding.Base64
 object MimeUtility {
 
     fun decode(payload: String): String {
+        if (Regex("""\?=( )+=\?""").containsMatchIn(payload)) {
+            // Multiple encoded words
+            val parts = payload
+                .split("=?")
+                .map { it.trim() }
+                .map { if (it.endsWith("?=")) "=?$it" else it }
+                .filterNot { it.isBlank() }
+            return parts.joinToString("") { decode(it) }
+        }
+
+        if (' ' in payload) {
+            return payload
+                .split(" ")
+                .joinToString(" ") { decode(it) }
+        }
         return when {
             payload.uppercase().startsWith("=?UTF-8?") -> decodeMime(payload, "UTF-8")
             payload.uppercase().startsWith("=?ISO-8859-1?") -> decodeMime(payload, "ISO-8859-1")
@@ -15,10 +30,6 @@ object MimeUtility {
     }
 
     private fun decodeMime(payload: String, charset: String): String {
-        if (' ' in payload) {
-            return payload.split(" ").joinToString(" ") { decode(it) }
-        }
-
         val content = payload.substringAfterIgnoreCase("=?$charset?")
         return when {
             content.uppercase().startsWith("B?") -> {
