@@ -19,7 +19,7 @@ fun main() {
             }.use { client ->
                 client.login()
                 client.getFolders()
-                    .filter { it.fullName == "INBOX" }
+                    .filter { it.fullName == "Archiv.Systeme" }
                     .forEach { folder ->
                         println(folder.fullName)
                         println()

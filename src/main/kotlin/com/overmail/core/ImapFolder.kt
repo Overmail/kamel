@@ -209,17 +209,17 @@ class ImapFolder(
                         )
                         email.sentAtValue = Optional.Set(date.toInstant(offset))
 
-                        if (remaining.startsWith("NIL ")) {
-                            email.subjectValue = Optional.Set(null)
-                            remaining = remaining.substringAfter("NIL ")
-                        } else {
-                            val subjectRegex = Regex("^(?:\"(?<subject>[^\"]*)\"|NIL) ")
-                            val subjectMatch = subjectRegex.find(remaining)
-                                ?: throw IllegalArgumentException("Could not parse subject in $remaining (subjectRegex)")
-                            val subject = subjectMatch.groups["subject"]?.value
-                            email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
-                            remaining = remaining.removePrefix(subjectMatch.value)
-                        }
+                        val subjectRegex = Regex("^(?:\"((?:[^\"\\\\]|\\\\.)*)\"|NIL) ")
+                        val subjectMatch = subjectRegex.find(remaining)
+                            ?: throw IllegalArgumentException("Could not parse subject in $remaining (subjectRegex)")
+
+                        val subjectRaw = subjectMatch.groups[1]?.value
+                        val subject = subjectRaw
+                            ?.replace("\\\"", "\"")
+                            ?.replace("\\\\", "\\")
+
+                        email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
+                        remaining = remaining.removePrefix(subjectMatch.value)
 
                         fun handleEmailUsers(remaining: String): Set<EmailUser> {
                             if (!remaining.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
