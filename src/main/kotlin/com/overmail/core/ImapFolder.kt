@@ -6,7 +6,6 @@ import com.overmail.util.substringAfterIgnoreCasing
 import io.ktor.network.sockets.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.Month
 import kotlinx.datetime.UtcOffset
@@ -172,7 +171,7 @@ class ImapFolder(
                             ?: throw IllegalArgumentException("Could not parse date in $remaining (quoteRegex)")
 
                         val dateWithOffsetRegex =
-                            Regex("((?<dayofweek>(Mon|Tue|Wed|Thu|Fri|Sat|Sun))(,)? )?(?<dayofmonth>\\d{1,2}) (?<month>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)) (?<year>\\d{4}) (?<hour>\\d{2}):(?<minute>\\d{2}):(?<second>\\d{2}) (?<offset>[+-]\\d{4}|UT)")
+                            Regex("((?<dayofweek>(Mon|Tue|Wed|Thu|Fri|Sat|Sun))(,)? )?(?<dayofmonth>\\d{1,2}) (?<month>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)) (?<year>\\d{4}) (?<hour>\\d{2}):(?<minute>\\d{2}):(?<second>\\d{2}) (?<offset>[+-]\\d{4}|UT|GMT)")
                         val rawDateWithOffset = dateWithOffsetRegex.find(remaining)
                             ?: throw IllegalArgumentException("Could not parse date in $remaining")
 
@@ -187,6 +186,7 @@ class ImapFolder(
 
                         val offset = when {
                             offsetRaw == "UT" -> UtcOffset.ZERO
+                            offsetRaw == "GMT" -> UtcOffset.ZERO
                             offsetRaw.startsWith("+") || offsetRaw.startsWith("-") -> {
                                 val offsetHours = offsetRaw.drop(1).take(2).toInt().let {
                                     if (offsetRaw.startsWith('-')) -it else it
