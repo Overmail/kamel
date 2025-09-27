@@ -27,16 +27,11 @@ fun main() {
                             envelope = true
                             flags = true
                             uid = true
-                            getId(699)
+                            dumpMailOnError = true
+                            //getAll()
+                            getId(10)
                         }.forEach { email ->
-                            println(email.uid.await().toString() + ": " + (email.subject.await() ?: "<no subject>"))
-                            println("    From: " + email.from.await().joinToString(", ") { it.toString() })
-                            println("    Sender: " + email.senders.await().joinToString(", ") { it.toString() })
-                            println("    To: " + email.to.await().joinToString(", ") { it.toString() })
-                            println("    Cc: " + email.cc.await().joinToString(", ") { it.toString() })
-                            println("    Bcc: " + email.bcc.await().joinToString(", ") { it.toString() })
-                            println("    Date: " + email.sentAt.await())
-                            println("    Flags: " + email.flags.await().joinToString(", ") { it.value })
+                            email.print()
                         }
                         println("=".repeat(20))
                     }

@@ -17,6 +17,8 @@ dependencies {
     implementation(libs.ktor.network)
     implementation(libs.ktor.network.tls)
     implementation(libs.kotlin.stdlib)
+
+    testImplementation(libs.logback.classic)
 }
 
 tasks.test {
