@@ -45,29 +45,15 @@ class EmailUser(
 
 @Suppress("unused")
 class Email internal constructor(
-    private val client: ImapClient
+    internal val folder: ImapFolder
 ) {
-    // Wird von ImapFolder gesetzt, um Inhalte on-demand zu laden
-    internal var contentLoader: (suspend (Long) -> EmailContent)? = null
+    val content = EmailContent(this)
 
-    // Inhalt der E-Mail (Rohinhalt, Text, HTML, Anhänge)
-    var contentValue: Optional<EmailContent> = Optional.Empty()
-        internal set
-
-    val content: Deferred<EmailContent>
-        get() = client.coroutineScope.async {
-            this@Email.contentValue.let { if (it is Optional.Set) return@async it.value }
-            val uid = this@Email.uidValue.getOrNull()
-                ?: throw IllegalStateException("UID ist nicht verfügbar – Inhalte können nicht geladen werden")
-            val loader = this@Email.contentLoader
-                ?: throw IllegalStateException("Kein Content-Loader gesetzt – Inhalte können nicht geladen werden")
-            loader(uid)
-        }
     var subjectValue: Optional<String?> = Optional.Empty()
         internal set
 
     val subject: Deferred<String?>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.subjectValue.let { if (it is Optional.Set) return@async it.value }
 
             TODO("Use connection to download subject")
@@ -77,7 +63,7 @@ class Email internal constructor(
         internal set
 
     val sentAt: Deferred<Instant>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.sentAtValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download sentAt")
         }
@@ -86,7 +72,7 @@ class Email internal constructor(
         internal set
 
     val senders: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.sendersValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download senders")
         }
@@ -95,7 +81,7 @@ class Email internal constructor(
         internal set
 
     val from: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.fromValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download from")
         }
@@ -104,7 +90,7 @@ class Email internal constructor(
         internal set
 
     val replyTo: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.replyToValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download replyTo")
         }
@@ -113,7 +99,7 @@ class Email internal constructor(
         internal set
 
     val to: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.toValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download to")
         }
@@ -122,7 +108,7 @@ class Email internal constructor(
         internal set
 
     val cc: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.ccValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Verbindung verwenden, um cc herunterzuladen")
         }
@@ -131,7 +117,7 @@ class Email internal constructor(
         internal set
 
     val bcc: Deferred<Set<EmailUser>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.bccValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Verbindung verwenden, um bcc herunterzuladen")
         }
@@ -140,7 +126,7 @@ class Email internal constructor(
         internal set
 
     val messageId: Deferred<String>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.messageIdValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download messageId")
         }
@@ -149,7 +135,7 @@ class Email internal constructor(
         internal set
 
     val inReplyTo: Deferred<String?>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.inReplyToValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download inReplyTo")
         }
@@ -158,7 +144,7 @@ class Email internal constructor(
         internal set
 
     val uid: Deferred<Long>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.uidValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download uid")
         }
@@ -167,7 +153,7 @@ class Email internal constructor(
         internal set
 
     val flags: Deferred<Set<Flag>>
-        get() = client.coroutineScope.async {
+        get() = folder.client.coroutineScope.async {
             this@Email.flagsValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download flags")
         }
