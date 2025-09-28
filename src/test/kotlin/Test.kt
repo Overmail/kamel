@@ -2,9 +2,8 @@ import com.overmail.core.ImapClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.runBlocking
-import kotlin.use
+import java.io.OutputStream
 
 fun main() {
     runBlocking {
@@ -33,9 +32,49 @@ fun main() {
                             getUid(15201)
                         }.forEach { email ->
                             println(email.subject.await())
-                            email.content.getContent(useText = true, useHtml = true).html?.consumeEach {
-                                println(it)
+
+                            val rawStream = object : OutputStream() {
+                                private val buffer = StringBuilder()
+                                override fun write(b: Int) {
+                                    if (b.toChar() == '\n') {
+                                        println(buffer.toString()) // Zeile ausgeben
+                                        buffer.clear()
+                                    } else {
+                                        buffer.append(b.toChar())
+                                    }
+                                }
                             }
+
+                            val textStream = object : OutputStream() {
+                                private val buffer = StringBuilder()
+                                override fun write(b: Int) {
+                                    if (b.toChar() == '\n') {
+                                        println("TEXT: $buffer")
+                                        buffer.clear()
+                                    } else {
+                                        buffer.append(b.toChar())
+                                    }
+                                }
+                            }
+
+                            val htmlStream = object : OutputStream() {
+                                private val buffer = StringBuilder()
+                                override fun write(b: Int) {
+                                    if (b.toChar() == '\n') {
+                                        println("HTML: $buffer")
+                                        buffer.clear()
+                                    } else {
+                                        buffer.append(b.toChar())
+                                    }
+                                }
+                            }
+
+
+                            email.content.getContent(
+                                rawStream = rawStream,
+                                textStream = textStream,
+                                htmlStream = htmlStream
+                            )
                             waitForEnter()
                         }
                         println("=".repeat(20))

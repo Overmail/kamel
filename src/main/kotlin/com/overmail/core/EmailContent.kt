@@ -1,12 +1,12 @@
 package com.overmail.core
 
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterNot
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import java.io.OutputStream
 
 class EmailContent(
     private val email: Email
@@ -28,80 +28,59 @@ class EmailContent(
      * If you try to access a part that is not requested, the method might hang indefinitely
      * since the requested stream is not being consumed.
      */
-    fun getContent(
-        useRaw: Boolean = false,
-        useHtml: Boolean = false,
-        useText: Boolean = false
-    ): Content {
+    suspend fun getContent(
+        rawStream: OutputStream,
+        textStream: OutputStream,
+        htmlStream: OutputStream,
+    ) {
         val raw = getRawContent()
-        val rawChannel = Channel<String>(capacity = Channel.BUFFERED)
-        val textChannel = Channel<String>(capacity = Channel.BUFFERED)
-        val htmlChannel = Channel<String>(capacity = Channel.BUFFERED)
         var hasParsedHeadersForCurrentBoundary = false
         var currentPart = CurrentPart.None
         var currentBoundary: String? = null
 
-        var hasText = false
-        var hasHtml = false
+        raw
+            .takeWhile { it != "OVERMAIL_DONE" }
+            .map { it.removePrefix("OVERMAIL_CONTENT: ") }
+            .filterNot { it.startsWith("*") }
+            .collect { line ->
+                rawStream.write(line.toByteArray(Charsets.UTF_8))
+                rawStream.write("\r\n".toByteArray(Charsets.UTF_8))
+                rawStream.flush()
+                if (line.startsWith("--")) {
+                    currentBoundary = if (currentBoundary != null && line.endsWith("--")) {
+                        hasParsedHeadersForCurrentBoundary = false
+                        currentPart = CurrentPart.None
+                        null
+                    } else {
+                        line.removePrefix("--").trim()
+                    }
+                }
 
-        email.folder.client.coroutineScope.launch {
-            raw
-                .takeWhile { it != "OVERMAIL_DONE" }
-                .map { it.removePrefix("OVERMAIL_CONTENT: ") }
-                .filterNot { it.startsWith("*") }
-                .collect { line ->
-                    if (useRaw) rawChannel.send(line)
-                    if (line.startsWith("--")) {
-                        currentBoundary = if (currentBoundary != null && line.endsWith("--")) {
-                            hasParsedHeadersForCurrentBoundary = false
-                            currentPart = CurrentPart.None
-                            null
-                        } else {
-                            line.removePrefix("--").trim()
+                if (currentBoundary != null) {
+                    if (!hasParsedHeadersForCurrentBoundary && line.isBlank()) {
+                        hasParsedHeadersForCurrentBoundary = true
+                        return@collect
+                    }
+                    if (!hasParsedHeadersForCurrentBoundary) {
+                        if (line.startsWith("Content-Type:", ignoreCase = true)) {
+                            val contentType = line.removePrefix("Content-Type:").trim()
+                            if (contentType.startsWith("text/html")) {
+                                currentPart = CurrentPart.Html
+                            } else if (contentType.startsWith("text/plain")) {
+                                currentPart = CurrentPart.Text
+                            }
                         }
                     }
 
-                    if (currentBoundary != null) {
-                        if (!hasParsedHeadersForCurrentBoundary && line.isBlank()) {
-                            hasParsedHeadersForCurrentBoundary = true
-                            return@collect
-                        }
-                        if (!hasParsedHeadersForCurrentBoundary) {
-                            if (line.startsWith("Content-Type:", ignoreCase = true)) {
-                                val contentType = line.removePrefix("Content-Type:").trim()
-                                if (contentType.startsWith("text/html")) {
-                                    currentPart = CurrentPart.Html
-                                } else if (contentType.startsWith("text/plain")) {
-                                    currentPart = CurrentPart.Text
-                                }
-                            }
-                        }
-
-                        if (hasParsedHeadersForCurrentBoundary) {
-                            when (currentPart) {
-                                CurrentPart.Html -> {
-                                    hasHtml = true
-                                    if (useHtml) htmlChannel.send(line)
-                                }
-                                CurrentPart.Text -> {
-                                    hasText = true
-                                    if (useText) textChannel.send(line)
-                                }
-                                else -> if (useRaw) rawChannel.send(line)
-                            }
+                    if (hasParsedHeadersForCurrentBoundary) {
+                        when (currentPart) {
+                            CurrentPart.Html -> htmlStream.write(line.toByteArray(Charsets.UTF_8))
+                            CurrentPart.Text -> textStream.write(line.toByteArray(Charsets.UTF_8))
+                            else -> Unit
                         }
                     }
                 }
-            rawChannel.close()
-            textChannel.close()
-            htmlChannel.close()
         }
-
-        return Content(
-            rawStream = rawChannel,
-            text = if (hasText) textChannel else null,
-            html = if (hasHtml) htmlChannel else null
-        )
     }
 
     private enum class CurrentPart {
@@ -110,9 +89,3 @@ class EmailContent(
         Text
     }
 }
-
-data class Content(
-    val rawStream: Channel<String>,
-    val text: Channel<String>?,
-    val html: Channel<String>?
-)
