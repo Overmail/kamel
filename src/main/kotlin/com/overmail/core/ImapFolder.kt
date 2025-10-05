@@ -3,8 +3,7 @@ package com.overmail.core
 import com.overmail.util.MimeUtility
 import com.overmail.util.Optional
 import com.overmail.util.sha1
-import com.overmail.util.substringAfterIgnoreCasing
-import io.ktor.network.sockets.*
+import com.overmail.util.substringAfterIgnoreCase
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.Month
@@ -14,10 +13,17 @@ import kotlinx.datetime.toInstant
 import org.slf4j.LoggerFactory
 
 class ImapFolder(
-    internal val client: ImapClient,
+    internal val imapClient: ImapClient,
     val path: List<String>,
     val delimiter: String,
     val specialType: SpecialType?
+): ClosableClientPool(
+    factory = {
+        imapClient.getClient(requireNew = true).apply {
+            this.execute("SELECT ${path.joinToString(delimiter)}")
+        }
+    },
+    name = "ImapFolder/${path.joinToString(delimiter)}"
 ) {
     val fullName = this@ImapFolder.path.joinToString(delimiter)
     val name = path.lastOrNull() ?: fullName
@@ -30,8 +36,9 @@ class ImapFolder(
         DRAFTS
     }
 
+    fun getIdleFolder() = IdleFolder(this)
+
     private val logger = LoggerFactory.getLogger("ImapFolder/$fullName")
-    private var socketInstance: SocketInstance? = null
 
     override fun toString(): String {
         return "Folder(path=$path, specialType=$specialType)"
@@ -41,13 +48,13 @@ class ImapFolder(
      * Returns all mail ids in this folder. This is a relative identifier, always starting with 0.
      */
     suspend fun getMailIds(): List<Int> {
-        val response = getSocketInstance().execute("SEARCH ALL")
+        val response = getClient().execute("SEARCH ALL")
         val ids = mutableListOf<Int>()
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return ids
             else if (line.uppercase().startsWith("* SEARCH")) {
                 line
-                    .substringAfterIgnoreCasing("* SEARCH ")
+                    .substringAfterIgnoreCase("* SEARCH ")
                     .split(" ")
                     .mapNotNull { it.toIntOrNull() }
                     .forEach { ids.add(it) }
@@ -56,22 +63,13 @@ class ImapFolder(
         return emptyList()
     }
 
-    internal suspend fun getSocketInstance(): SocketInstance {
-        if (socketInstance == null || socketInstance?.socket?.isClosed == true) socketInstance =
-            client.createNewSocket().apply {
-                this.login(client.username, client.password)
-                execute("SELECT \"${path.joinToString(delimiter)}\"").await()
-            }
-        return socketInstance!!
-    }
-
     suspend fun getIdByUid(uid: Long): Int? {
-        val response = getSocketInstance().execute("SEARCH UID $uid").await()
+        val response = getClient().execute("SEARCH UID $uid").await()
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return null
             else if (line.uppercase().startsWith("* SEARCH")) {
                 val id = line
-                    .substringAfterIgnoreCasing("* SEARCH ")
+                    .substringAfterIgnoreCase("* SEARCH ")
                     .split(" ")
                     .firstNotNullOfOrNull { it.toIntOrNull() }
                 return id
@@ -113,7 +111,7 @@ class ImapFolder(
         if (command.last() == ' ') command.deleteCharAt(command.lastIndex)
         command.append(")")
 
-        val response = getSocketInstance().execute(command.toString()).await()
+        val response = getClient().execute(command.toString()).await()
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach
 

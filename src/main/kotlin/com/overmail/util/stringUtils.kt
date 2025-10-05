@@ -2,7 +2,7 @@ package com.overmail.util
 
 import java.security.MessageDigest
 
-internal fun String.substringAfterIgnoreCasing(delimiter: String): String {
+internal fun String.substringAfterIgnoreCase(delimiter: String): String {
     if (this.lowercase().startsWith(delimiter.lowercase())) return this.drop(delimiter.length)
     return this
 }

@@ -13,8 +13,8 @@ class EmailContent(
 ) {
     fun getRawContent(): MutableSharedFlow<String> {
         val flow = MutableSharedFlow<String>()
-        email.folder.client.coroutineScope.launch {
-            val response = email.folder.getSocketInstance().execute("UID FETCH ${email.uid.await()} BODY[]")
+        email.folder.imapClient.coroutineScope.launch {
+            val response = email.folder.getClient().execute("UID FETCH ${email.uid.await()} BODY[]")
             response.response.consumeEach {
                 flow.emit("OVERMAIL_CONTENT: $it")
             }
