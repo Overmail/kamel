@@ -9,7 +9,7 @@ fun main() {
                 host = "imap.mail.de",
                 port = 993,
                 ssl = true,
-                debug = false,
+                debug = true,
                 username = System.getenv("IMAP_USERNAME").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
                 password = System.getenv("IMAP_PASSWORD").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
                 coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -21,7 +21,7 @@ fun main() {
                     .let { folder ->
                         println(folder.fullName)
                         folder.getMails {
-                            getUid(6)
+                            getId(6)
                             envelope = true
                             flags = true
                             uid = true

@@ -92,6 +92,7 @@ data class SocketInstance(
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 ) : AutoCloseable {
 
+    private val id = System.currentTimeMillis()
     private var lastCommandId: Int = 0
     internal val commandMutex = Mutex()
 
@@ -104,14 +105,14 @@ data class SocketInstance(
         val channel = Channel<String>(Channel.BUFFERED)
         val isDone = CompletableDeferred<Unit>()
         this.output.writeStringUtf8("$message\r\n")
-        if (isDebug) println(message.trim())
+        if (isDebug) println("SI $id > " + message.trim())
 
         var isCancelled = false
 
         val job = coroutineScope.launch {
             while (!isCancelled) {
                 val line = this@SocketInstance.input.readUTF8Line() ?: continue
-                if (isDebug) println(line)
+                if (isDebug) println("SI $id < $line")
                 channel.send(line)
                 if (line.startsWith("$commandIdString OK")) break
             }
