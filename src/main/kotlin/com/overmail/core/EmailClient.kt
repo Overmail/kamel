@@ -83,6 +83,7 @@ class ImapClient(
     }
 }
 
+typealias SocketInstanceFactory = suspend () -> SocketInstance
 data class SocketInstance(
     val socket: Socket,
     val input: ByteReadChannel,
@@ -90,7 +91,6 @@ data class SocketInstance(
     val isDebug: Boolean,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 ) : AutoCloseable {
-    typealias Factory = suspend () -> SocketInstance
 
     private var lastCommandId: Int = 0
     internal val commandMutex = Mutex()

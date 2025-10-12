@@ -1,6 +1,5 @@
 import com.overmail.core.ImapClient
 import kotlinx.coroutines.*
-import kotlin.time.Duration.Companion.seconds
 
 fun main() {
     runBlocking {
@@ -17,22 +16,20 @@ fun main() {
                 client.testConnection()
                 client
                     .getFolders(onlyRoot = false)
-                    .filter { it.fullName == "INBOX" }
-                    .map { it.getIdleFolder() }
-                    .onEach { launch { it.idle {
-                        onNewMessage { messageUid ->
-                            println("NEW MESSAGE $messageUid")
+                    .first { it.fullName == "INBOX" }
+                    .let { folder ->
+                        println(folder.fullName)
+                        folder.getMails {
+                            getUid(6)
+                            envelope = true
+                            uid = true
+                            dumpMailOnError = true
+                        }.forEach { email ->
+                            println(email.subject.await())
                         }
+                        println()
+                    }
 
-                        onRemovedMessage { messageUid ->
-                            println("REMOVED MESSAGE $messageUid")
-                        }
-
-                        onFlagChanged { messageUid, flags ->
-                            println("FLAG CHANGED MESSAGE $messageUid $flags")
-                        }
-                    } } }
-                    .let { delay(60.seconds) }
 //                    .let { folder ->
 //                        println(folder.fullName)
 //                        println()

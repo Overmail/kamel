@@ -7,7 +7,7 @@ import java.lang.AutoCloseable
  * Manages the pool of socket instances.
  */
 abstract class ClosableClientPool(
-    private val factory: SocketInstance.Factory,
+    private val factory: SocketInstanceFactory,
     private val maxPoolSize: Int = 5,
     name: String = "SocketInstancePool"
 ) : AutoCloseable {

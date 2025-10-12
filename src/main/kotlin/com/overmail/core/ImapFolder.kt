@@ -113,6 +113,7 @@ class ImapFolder(
 
         val response = getClient().execute(command.toString()).await()
         response.response.consumeEach { line ->
+            var line = line // Make it mutable
             if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach
 
             val email = Email(folder = this)
@@ -216,17 +217,28 @@ class ImapFolder(
                         )
                         email.sentAtValue = Optional.Set(date.toInstant(offset))
 
-                        val subjectRegex = Regex("^(?:\"((?:[^\"\\\\]|\\\\.)*)\"|NIL) ")
-                        val subjectMatch = subjectRegex.find(consuming)
-                            ?: throw IllegalArgumentException("Could not parse subject")
+                        val subjectRaw = if (consuming.startsWith("{")) {
+                            consuming = consuming.drop(1)
+                            val followingBytesCount = consuming.substringBefore("}").toInt()
+                            line = response.response.receive()
+                            consuming = line
+                            val result = consuming.take(followingBytesCount)
+                            consuming = consuming.drop(followingBytesCount + 1) // +2 for \r\n
+                            result
+                        } else {
+                            val subjectRegex = Regex("^(?:\"((?:[^\"\\\\]|\\\\.)*)\"|NIL) ")
+                            val subjectMatch = subjectRegex.find(consuming)
+                                ?: throw IllegalArgumentException("Could not parse subject")
 
-                        val subjectRaw = subjectMatch.groups[1]?.value
+                            consuming = consuming.removePrefix(subjectMatch.value)
+                            subjectMatch.groups[1]?.value
+                        }
+
                         val subject = subjectRaw
                             ?.replace("\\\"", "\"")
                             ?.replace("\\\\", "\\")
 
                         email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
-                        consuming = consuming.removePrefix(subjectMatch.value)
 
                         fun handleEmailUsers(consuming: String): Set<EmailUser> {
                             if (!consuming.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
@@ -323,6 +335,8 @@ class ImapFolder(
                         emails.add(email)
                         continue
                     }
+
+                    if (consuming == ")") break
 
                     throw IllegalArgumentException("Could not parse FETCH response")
                 }
