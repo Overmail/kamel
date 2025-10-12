@@ -20,13 +20,14 @@ fun main() {
                     .let { folder ->
                         println(folder.fullName)
                         folder.getMails {
-                            getUid(6)
+                            getAll()
                             envelope = true
                             flags = true
                             uid = true
                             dumpMailOnError = true
                         }.forEach { email ->
                             println(email.subject.await())
+                            println(email.flags.await())
                         }
                         println()
                     }

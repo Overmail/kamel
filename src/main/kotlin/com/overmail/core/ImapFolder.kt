@@ -128,6 +128,8 @@ class ImapFolder(
                         consuming = consuming
                             .removePrefix("FLAGS (")
 
+                        email.flagsValue = Optional.Set(emptySet())
+
                         while (!consuming.startsWith(")")) {
                             var currentFlag = ""
                             while (consuming.first() != ' ' && consuming.first() != ')') {
