@@ -22,6 +22,7 @@ fun main() {
                         folder.getMails {
                             getUid(6)
                             envelope = true
+                            flags = true
                             uid = true
                             dumpMailOnError = true
                         }.forEach { email ->

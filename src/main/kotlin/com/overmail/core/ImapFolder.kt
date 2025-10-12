@@ -119,7 +119,7 @@ class ImapFolder(
             val email = Email(folder = this)
             var consuming = line
                 .substringAfter("(")
-                .substringBeforeLast(")")
+                .let { if (it.endsWith("}")) it else it.substringBeforeLast(")") }
                 .trim()
 
             try {
