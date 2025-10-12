@@ -59,58 +59,40 @@ class EmailContent(
             pipeOut.close()
         }
 
-        println("vor einlesen")
         val message = MimeMessage(Session.getDefaultInstance(Properties()), pipeIn)
-        println("nach einlesen")
 
-        fun handlePart(part: Any, depth: Int = 0) {
-            val indent = "  ".repeat(depth)
-            println("${indent}handlePart: ${part::class.simpleName}")
+        fun handlePart(part: Any) {
             when (part) {
-                is String -> {
-                    println("${indent}String part: ${part.take(40)}...")
-                    textStream.write(part.toByteArray())
-                }
+                is String -> textStream.write(part.toByteArray())
 
                 is Multipart -> {
-                    println("${indent}Multipart part with ${part.count} body parts")
                     for (i in 0 until part.count) {
-                        println("${indent}Handling body part $i")
-                        handlePart(part.getBodyPart(i), depth + 1)
+                        handlePart(part.getBodyPart(i))
                     }
                 }
 
                 is BodyPart -> {
                     val disposition = part.disposition?.lowercase()
-                    println("${indent}BodyPart disposition: $disposition")
-                    if (disposition != null && disposition == "attachment") {
-                        println("${indent}Skipping attachment")
-                        return
-                    }
+                    if (disposition != null && disposition == "attachment") return
 
                     val contentType = part.contentType.lowercase()
-                    println("${indent}BodyPart contentType: $contentType")
                     val content = part.content
 
                     when {
                         contentType.contains("text/plain") && content is String -> {
-                            println("${indent}Text/plain content")
                             textStream.write(content.toByteArray())
                         }
 
                         contentType.contains("text/html") && content is String -> {
-                            println("${indent}Text/html content")
                             htmlStream.write(content.toByteArray())
                         }
 
                         content is Multipart -> {
-                            println("${indent}Nested Multipart content")
-                            handlePart(content, depth + 1)
+                            handlePart(content)
                         }
 
                         content is BodyPart -> {
-                            println("${indent}Nested BodyPart content")
-                            handlePart(content, depth + 1)
+                            handlePart(content)
                         }
                     }
                 }
@@ -119,5 +101,12 @@ class EmailContent(
 
         val content = message.content
         handlePart(content)
+
+        rawStream.flush()
+        textStream.flush()
+        htmlStream.flush()
+        rawStream.close()
+        textStream.close()
+        htmlStream.close()
     }
 }
