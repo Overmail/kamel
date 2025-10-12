@@ -1,5 +1,6 @@
 import com.overmail.core.ImapClient
 import kotlinx.coroutines.*
+import java.io.File
 
 fun main() {
     runBlocking {
@@ -8,7 +9,7 @@ fun main() {
                 host = "imap.mail.de",
                 port = 993,
                 ssl = true,
-                debug = true,
+                debug = false,
                 username = System.getenv("IMAP_USERNAME").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
                 password = System.getenv("IMAP_PASSWORD").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
                 coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -20,7 +21,7 @@ fun main() {
                     .let { folder ->
                         println(folder.fullName)
                         folder.getMails {
-                            getAll()
+                            getUid(6)
                             envelope = true
                             flags = true
                             uid = true
@@ -28,6 +29,13 @@ fun main() {
                         }.forEach { email ->
                             println(email.subject.await())
                             println(email.flags.await())
+                            val textFile = File("./out.txt")
+                            val htmlFile = File("./out.html")
+                            val rawFile = File("./out.eml")
+                            textFile.delete()
+                            htmlFile.delete()
+                            rawFile.delete()
+                            email.content.getContent(rawFile.outputStream(), textFile.outputStream(), htmlFile.outputStream())
                         }
                         println()
                     }

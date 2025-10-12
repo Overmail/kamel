@@ -45,7 +45,7 @@ object MimeUtility {
         }
     }
 
-    private fun decodeQuotedPrintable(input: String): String {
+    fun decodeQuotedPrintable(input: String): String {
         return decodeQuitedPrintable(input).toByteArray().toString(Charsets.UTF_8)
     }
 
