@@ -1,9 +1,11 @@
 package es.jvbabi.overmail.core
 
+import es.jvbabi.overmail.util.MimeContent
 import jakarta.mail.BodyPart
 import jakarta.mail.Multipart
 import jakarta.mail.Session
 import jakarta.mail.internet.MimeMessage
+import jakarta.mail.internet.MimePart
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterNot
@@ -59,7 +61,9 @@ class EmailContent(
             pipeOut.close()
         }
 
-        val message = MimeMessage(Session.getDefaultInstance(Properties()), pipeIn)
+        // getInstance, not getDefaultInstance: the latter returns the JVM-wide default session and
+        // ignores the properties passed here as soon as anything else created one first.
+        val message = MimeMessage(Session.getInstance(Properties()), pipeIn)
 
         fun handlePart(part: Any) {
             when (part) {
@@ -76,7 +80,7 @@ class EmailContent(
                     if (disposition != null && disposition == "attachment") return
 
                     val contentType = part.contentType.lowercase()
-                    val content = part.content
+                    val content = if (part is MimePart) MimeContent.of(part) else part.content
 
                     when {
                         contentType.contains("text/plain") && content is String -> {
@@ -99,8 +103,7 @@ class EmailContent(
             }
         }
 
-        val content = message.content
-        handlePart(content)
+        handlePart(MimeContent.of(message))
 
         rawStream.flush()
         textStream.flush()
