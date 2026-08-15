@@ -1,9 +1,9 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
-import com.overmail.util.MimeUtility
-import com.overmail.util.Optional
-import com.overmail.util.sha1
-import com.overmail.util.substringAfterIgnoreCase
+import es.jvbabi.overmail.util.MimeUtility
+import es.jvbabi.overmail.util.Optional
+import es.jvbabi.overmail.util.sha1
+import es.jvbabi.overmail.util.substringAfterIgnoreCase
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.Month

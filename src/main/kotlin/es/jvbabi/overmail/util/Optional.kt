@@ -1,4 +1,4 @@
-package com.overmail.util
+package es.jvbabi.overmail.util
 
 sealed class Optional<T: Any?> {
     class Empty<T: Any?>(): Optional<T>() {

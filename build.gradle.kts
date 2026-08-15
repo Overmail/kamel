@@ -6,7 +6,8 @@ plugins {
 }
 
 group = "es.jvbabi.overmail"
-version = System.getenv("VERSION")?.ifBlank { null } ?: "unspecified"
+// VERSION is the git tag name (e.g. "v0.0.1"); Maven coordinates must not carry the "v" prefix.
+version = System.getenv("VERSION")?.removePrefix("v")?.ifBlank { null } ?: "unspecified"
 
 repositories {
     mavenCentral()
@@ -31,17 +32,10 @@ kotlin {
 
     compilerOptions {
         freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
-        freeCompilerArgs.add("-Xcontext-parameters")
-        freeCompilerArgs.add("-Xnested-type-aliases")
         freeCompilerArgs.add("-opt-in=kotlin.contracts.ExperimentalContracts")
 
         jvmTarget = JvmTarget.JVM_26
     }
-}
-
-tasks.register<Jar>("sourcesJar") {
-    archiveClassifier.set("sources")
-    from(sourceSets.main.get().allSource)
 }
 
 mavenPublishing {

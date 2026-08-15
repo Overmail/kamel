@@ -1,4 +1,4 @@
-package com.overmail.util
+package es.jvbabi.overmail.util
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async

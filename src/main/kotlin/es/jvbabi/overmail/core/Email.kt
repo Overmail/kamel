@@ -1,7 +1,7 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
-import com.overmail.util.MimeUtility
-import com.overmail.util.Optional
+import es.jvbabi.overmail.util.MimeUtility
+import es.jvbabi.overmail.util.Optional
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlin.time.Instant

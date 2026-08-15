@@ -1,4 +1,4 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
 import jakarta.mail.BodyPart
 import jakarta.mail.Multipart

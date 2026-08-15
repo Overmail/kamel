@@ -1,4 +1,4 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.runBlocking
