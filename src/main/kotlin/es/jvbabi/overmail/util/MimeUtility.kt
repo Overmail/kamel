@@ -1,4 +1,4 @@
-package com.overmail.util
+package es.jvbabi.overmail.util
 
 import java.io.ByteArrayOutputStream
 import kotlin.io.encoding.Base64

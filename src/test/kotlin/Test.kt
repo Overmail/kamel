@@ -1,4 +1,4 @@
-import com.overmail.core.ImapClient
+import es.jvbabi.overmail.core.ImapClient
 import kotlinx.coroutines.*
 import java.io.File
 

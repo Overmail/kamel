@@ -1,6 +1,6 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
-import com.overmail.util.substringAfterIgnoreCase
+import es.jvbabi.overmail.util.substringAfterIgnoreCase
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.tls.*
@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.sync.Mutex
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
 class ImapClient(
@@ -111,7 +112,7 @@ data class SocketInstance(
 
         val job = coroutineScope.launch {
             while (!isCancelled) {
-                val line = this@SocketInstance.input.readUTF8Line() ?: continue
+                val line = this@SocketInstance.input.readLine() ?: break
                 if (isDebug) println("SI $id < $line")
                 channel.send(line)
                 if (line.startsWith("$commandIdString OK")) break
@@ -158,7 +159,10 @@ data class SocketInstance(
     init {
         this.coroutineScope.launch {
             while (true) {
-                val line = this@SocketInstance.input.readUTF8Line() ?: continue
+                val line = this@SocketInstance.input.readLine() ?: run {
+                    isReady.completeExceptionally(IOException("Connection closed before server greeting"))
+                    return@launch
+                }
                 if (!isReady.isCompleted && line.startsWith("* OK")) break
             }
             isReady.complete(Unit)

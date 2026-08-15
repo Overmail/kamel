@@ -1,4 +1,4 @@
-package com.overmail.core
+package es.jvbabi.overmail.core
 
 import org.slf4j.LoggerFactory
 import java.lang.AutoCloseable
