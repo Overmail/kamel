@@ -5,6 +5,7 @@ ktor = "3.5.2"
 logback = "1.6.2"
 eclipse-angus-jakarta = "2.0.5"
 maven-publish = "0.37.0"
+kotest = "6.2.4"
 
 [libraries]
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
@@ -13,6 +14,8 @@ ktor-network-tls = { module = "io.ktor:ktor-network-tls", version.ref = "ktor" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib-jdk8", version.ref = "kotlin" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 eclipse-angus-jakarta = { module = "org.eclipse.angus:jakarta.mail", version.ref = "eclipse-angus-jakarta" }
+kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
+kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -21,6 +21,8 @@ dependencies {
     implementation(libs.eclipse.angus.jakarta)
 
     testImplementation(libs.logback.classic)
+    testImplementation(libs.kotest.runner.junit5)
+    testImplementation(libs.kotest.assertions.core)
 }
 
 tasks.test {

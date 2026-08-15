@@ -1,5 +1,7 @@
 package es.jvbabi.overmail.core
 
+import es.jvbabi.overmail.parser.IdleEvent
+import es.jvbabi.overmail.parser.IdleResponseParser
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.runBlocking
 
@@ -17,27 +19,11 @@ class IdleFolder(
         this.cancel()
         currentIdleCommand = getClient().execute("IDLE").also { commandResponse ->
             commandResponse.response.consumeEach { line ->
-                val trimmed = line.trim()
-
-                when {
-                    trimmed.startsWith("* ") && trimmed.endsWith(" EXISTS") -> {
-                        val messageIndex = trimmed.substringAfter("* ").substringBefore(" EXISTS").toLong()
-                        config._onNewMessage.forEach { it(messageIndex) }
-                    }
-                    trimmed.startsWith("* ") && trimmed.endsWith(" EXPUNGE") -> {
-                        val messageIndex = trimmed.substringAfter("* ").substringBefore(" EXPUNGE").toLong()
-                        config._onRemovedMessage.forEach { it(messageIndex) }
-                    }
-                    trimmed.startsWith("* ") && "FETCH" in trimmed && "FLAGS" in trimmed -> {
-                        // e.G: * 5 FETCH (FLAGS (\Seen \Flagged))
-                        val messageIndex = trimmed.substringAfter("* ").substringBefore(" FETCH").toLong()
-                        val flagsPart = trimmed.substringAfter("FLAGS (").substringBefore(")")
-                        val flags = flagsPart
-                            .split(" ")
-                            .filter { it.isNotBlank() }
-                            .map { Email.Flag.fromString(it) }
-                        config._onFlagChanged.forEach { it(messageIndex, flags) }
-                    }
+                when (val event = IdleResponseParser.parse(line)) {
+                    is IdleEvent.NewMessage -> config._onNewMessage.forEach { it(event.messageIndex) }
+                    is IdleEvent.RemovedMessage -> config._onRemovedMessage.forEach { it(event.messageIndex) }
+                    is IdleEvent.FlagsChanged -> config._onFlagChanged.forEach { it(event.messageIndex, event.flags) }
+                    null -> Unit
                 }
             }
         }
