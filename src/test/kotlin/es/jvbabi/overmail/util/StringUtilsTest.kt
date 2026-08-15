@@ -28,6 +28,24 @@ class StringUtilsTest : FunSpec({
         }
     }
 
+    context("quoteImap") {
+        test("wraps the value in quotes") {
+            "INBOX".quoteImap() shouldBe "\"INBOX\""
+        }
+
+        test("keeps names with a space in a single argument") {
+            "Sent Items".quoteImap() shouldBe "\"Sent Items\""
+        }
+
+        test("escapes quotes and backslashes") {
+            """a"b\c""".quoteImap() shouldBe """"a\"b\\c""""
+        }
+
+        test("quotes an empty name") {
+            "".quoteImap() shouldBe "\"\""
+        }
+    }
+
     context("sha1") {
         test("hashes the utf-8 bytes of the input as lowercase hex") {
             "abc".sha1() shouldBe "a9993e364706816aba3e25717850c26c9cd0d89d"
