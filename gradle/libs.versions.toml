@@ -20,3 +20,4 @@ kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }
+kotest = { id = "io.kotest", version.ref = "kotest" }
