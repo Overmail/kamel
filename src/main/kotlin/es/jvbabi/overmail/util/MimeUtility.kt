@@ -5,16 +5,16 @@ import kotlin.io.encoding.Base64
 
 object MimeUtility {
 
+    /**
+     * Separates two adjacent encoded words. The whitespace between them is not part of the text.
+     *
+     * @see <a href="https://www.rfc-editor.org/rfc/rfc2047#section-6.2">RFC 2047 - 6.2</a>
+     */
+    private val adjacentEncodedWords = Regex("""(?<=\?=)( )+(?==\?)""")
+
     fun decode(payload: String): String {
-        if (Regex("""\?=( )+=\?""").containsMatchIn(payload)) {
-            // Multiple encoded words
-            val parts = payload
-                .split("=?")
-                .map { it.trim() }
-                .map { if (it.endsWith("?=")) "=?$it" else it }
-                .filterNot { it.isBlank() }
-            return parts.joinToString("") { decode(it) }
-        }
+        val encodedWords = payload.split(adjacentEncodedWords)
+        if (encodedWords.size > 1) return encodedWords.joinToString("") { decode(it) }
 
         if (' ' in payload) {
             return payload

@@ -1,6 +1,6 @@
 package es.jvbabi.overmail.core
 
-import es.jvbabi.overmail.util.substringAfterIgnoreCase
+import es.jvbabi.overmail.parser.FolderListParser
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.tls.*
@@ -56,27 +56,15 @@ class ImapClient(
                 append("\"")
             })
 
-            val folderRegex = Regex("""\((.*?)\)\s+"(.*?)"\s+(.*)""")
             val folders = mutableListOf<ImapFolder>()
             response.response.consumeEach { line ->
                 if (line.startsWith("${response.commandId} OK LIST", ignoreCase = true)) return@consumeEach
-                val data = line.substringAfterIgnoreCase("LIST ")
-                val match = folderRegex.find(data)
-                if (match != null) {
-                    val flags = match.groupValues[1].split(" ").map { it.trim() }
-                    val delimiter = match.groupValues[2]
-                    val path = match.groupValues[3].trim('"').split(delimiter)
-                    val specialType = if (flags.contains("\\Trash")) ImapFolder.SpecialType.TRASH
-                    else if (flags.contains("\\Junk")) ImapFolder.SpecialType.SPAM
-                    else if (flags.contains("\\Sent")) ImapFolder.SpecialType.SENT
-                    else if (flags.contains("\\Drafts")) ImapFolder.SpecialType.DRAFTS
-                    else if (path.size == 1 && path[0] == "INBOX") ImapFolder.SpecialType.INBOX
-                    else null
-
-                    folders.add(ImapFolder(this, path, delimiter, specialType))
+                val folder = FolderListParser.parse(line)
+                if (folder != null) {
+                    folders.add(ImapFolder(this, folder.path, folder.delimiter, folder.specialType))
                     return@consumeEach
                 }
-                logger.warn("Failed to parse folder: $data")
+                logger.warn("Failed to parse folder: $line")
             }
 
             return folders

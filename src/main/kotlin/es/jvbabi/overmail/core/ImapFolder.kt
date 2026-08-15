@@ -1,15 +1,10 @@
 package es.jvbabi.overmail.core
 
-import es.jvbabi.overmail.util.MimeUtility
+import es.jvbabi.overmail.parser.FetchResponseParser
+import es.jvbabi.overmail.parser.SearchResponseParser
+import es.jvbabi.overmail.parser.buildFetchCommand
 import es.jvbabi.overmail.util.Optional
-import es.jvbabi.overmail.util.sha1
-import es.jvbabi.overmail.util.substringAfterIgnoreCase
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.Month
-import kotlinx.datetime.UtcOffset
-import kotlinx.datetime.format.MonthNames
-import kotlinx.datetime.toInstant
 import org.slf4j.LoggerFactory
 
 class ImapFolder(
@@ -52,13 +47,9 @@ class ImapFolder(
         val ids = mutableListOf<Int>()
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return ids
-            else if (line.uppercase().startsWith("* SEARCH")) {
-                line
-                    .substringAfterIgnoreCase("* SEARCH ")
-                    .split(" ")
-                    .mapNotNull { it.toIntOrNull() }
-                    .forEach { ids.add(it) }
-            } else logger.error("Could not get mail ids: $line")
+            val parsed = SearchResponseParser.parseIds(line)
+            if (parsed != null) ids.addAll(parsed)
+            else logger.error("Could not get mail ids: $line")
         }
         return emptyList()
     }
@@ -67,13 +58,9 @@ class ImapFolder(
         val response = getClient().execute("SEARCH UID $uid")
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return null
-            else if (line.uppercase().startsWith("* SEARCH")) {
-                val id = line
-                    .substringAfterIgnoreCase("* SEARCH ")
-                    .split(" ")
-                    .firstNotNullOfOrNull { it.toIntOrNull() }
-                return id
-            } else logger.error("Could not get mail id by uid: $line")
+            val parsed = SearchResponseParser.parseIds(line)
+            if (parsed != null) return parsed.firstOrNull()
+            else logger.error("Could not get mail id by uid: $line")
         }
         return null
     }
@@ -103,262 +90,49 @@ class ImapFolder(
             is FetchRequest.EmailSelection.Uid -> from
         }
 
-        val command = StringBuilder()
-        command.append("FETCH ${from}:${to} (")
-        if (config.flags) command.append("FLAGS ")
-        if (config.envelope) command.append("ENVELOPE ")
-        if (config.uid) command.append("UID ")
-        if (command.last() == ' ') command.deleteCharAt(command.lastIndex)
-        command.append(")")
+        val command = buildFetchCommand(config, from, to)
 
         // No await() here: the reader job fills a buffered channel, so awaiting it before consuming
         // deadlocks as soon as the response exceeds the channel capacity. consumeEach already runs
         // until the job completes and closes the channel.
-        val response = getClient().execute(command.toString())
+        val response = getClient().execute(command)
         response.response.consumeEach { line ->
-            var line = line // Make it mutable
             if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach
 
-            val email = Email(folder = this)
-            var consuming = line
-                .substringAfter("(")
-                .let { if (it.endsWith("}")) it else it.substringBeforeLast(")") }
-                .trim()
-
-            try {
-                while (consuming.isNotEmpty()) {
-                    if (consuming.startsWith("FLAGS")) {
-                        consuming = consuming
-                            .removePrefix("FLAGS (")
-
-                        email.flagsValue = Optional.Set(emptySet())
-
-                        while (!consuming.startsWith(")")) {
-                            var currentFlag = ""
-                            while (consuming.first() != ' ' && consuming.first() != ')') {
-                                currentFlag += consuming.first()
-                                consuming = consuming.drop(1)
-                            }
-                            if (currentFlag.isBlank()) continue
-                            email.flagsValue = Optional.Set((email.flagsValue.getOrNull() ?: emptySet()) + Email.Flag.fromString(currentFlag))
-                            consuming = consuming.trimStart()
-                        }
-                        consuming = consuming
-                            .substringAfter(")")
-                            .trim()
-                        continue
-                    }
-
-                    if (consuming.startsWith("UID")) {
-                        consuming = consuming
-                            .removePrefix("UID ")
-                            .trim()
-
-                        val uid = consuming.substringBefore(" ").toLongOrNull()
-                            ?: throw IllegalArgumentException("Could not parse UID in $line")
-                        email.uidValue = Optional.Set(uid)
-                        // UID may be the last item in the response; without an explicit missing
-                        // delimiter value substringAfter would return the UID itself and fail to parse.
-                        consuming = consuming
-                            .substringAfter(" ", "").trim()
-                        continue
-                    }
-
-                    if (consuming.startsWith("ENVELOPE")) {
-                        consuming = consuming
-                            .removePrefix("ENVELOPE (")
-                            .trim()
-
-
-                        /**
-                         *  The fields of the envelope structure are in the following
-                         *  order: date, subject, from, sender, reply-to, to, cc, bcc,
-                         *  in-reply-to, and message-id. The date, subject, in-reply-to,
-                         *  and message-id fields are strings. The from, sender, reply-to,
-                         *  to, cc, and bcc fields are parenthesized lists of address
-                         *  structures.
-                         * @see <a href="https://www.rfc-editor.org/rfc/rfc3501#section-2.3.5">RFC 3501 - 2.3.5. ENVELOPE</a>
-                         */
-
-                        val simpleQuoteRegex = Regex("\"([^\"]*)\"") // matches "content"
-
-                        val rawDate = simpleQuoteRegex.find(consuming)?.groupValues?.get(1)
-                            ?: throw IllegalArgumentException("Could not parse date in $consuming (quoteRegex)")
-
-                        val dateWithOffsetRegex =
-                            Regex("((?<dayofweek>(Mon|Tue|Wed|Thu|Fri|Sat|Sun))(,)? )?(?<dayofmonth>\\d{1,2}) (?<month>(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)) (?<year>\\d{4}) (?<hour>\\d{2}):(?<minute>\\d{2}):(?<second>\\d{2}) (?<offset>[+-]\\d{4}|UT|GMT)")
-                        val rawDateWithOffset = dateWithOffsetRegex.find(consuming)
-                            ?: throw IllegalArgumentException("Could not parse date in $consuming")
-
-                        val dayOfMonth = rawDateWithOffset.groups["dayofmonth"]!!.value.toInt()
-                        val month =
-                            Month(MonthNames.ENGLISH_ABBREVIATED.names.indexOf(rawDateWithOffset.groups["month"]!!.value) + 1)
-                        val year = rawDateWithOffset.groups["year"]!!.value.toInt()
-                        val hour = rawDateWithOffset.groups["hour"]!!.value.toInt()
-                        val minute = rawDateWithOffset.groups["minute"]!!.value.toInt()
-                        val second = rawDateWithOffset.groups["second"]!!.value.toInt()
-                        val offsetRaw = rawDateWithOffset.groups["offset"]!!.value
-
-                        val offset = when {
-                            offsetRaw == "UT" -> UtcOffset.ZERO
-                            offsetRaw == "GMT" -> UtcOffset.ZERO
-                            offsetRaw.startsWith("+") || offsetRaw.startsWith("-") -> {
-                                val offsetHours = offsetRaw.drop(1).take(2).toInt().let {
-                                    if (offsetRaw.startsWith('-')) -it else it
-                                }
-                                val offsetMinutes = offsetRaw.drop(3).take(2).toInt()
-                                UtcOffset(offsetHours, offsetMinutes)
-                            }
-
-                            else -> throw IllegalArgumentException("Invalid offset: $offsetRaw")
-                        }
-
-                        consuming = consuming.removePrefix("\"$rawDate\" ")
-                        val date = LocalDateTime(
-                            day = dayOfMonth,
-                            month = month,
-                            year = year,
-                            hour = hour,
-                            minute = minute,
-                            second = second,
-                        )
-                        email.sentAtValue = Optional.Set(date.toInstant(offset))
-
-                        val subjectRaw = if (consuming.startsWith("{")) {
-                            consuming = consuming.drop(1)
-                            val followingBytesCount = consuming.substringBefore("}").toInt()
-                            line = response.response.receive()
-                            consuming = line
-                            val result = consuming.take(followingBytesCount)
-                            consuming = consuming.drop(followingBytesCount + 1) // +2 for \r\n
-                            result
-                        } else {
-                            val subjectRegex = Regex("^(?:\"((?:[^\"\\\\]|\\\\.)*)\"|NIL) ")
-                            val subjectMatch = subjectRegex.find(consuming)
-                                ?: throw IllegalArgumentException("Could not parse subject")
-
-                            consuming = consuming.removePrefix(subjectMatch.value)
-                            subjectMatch.groups[1]?.value
-                        }
-
-                        val subject = subjectRaw
-                            ?.replace("\\\"", "\"")
-                            ?.replace("\\\\", "\\")
-
-                        email.subjectValue = Optional.Set(subject?.let { MimeUtility.decode(it) })
-
-                        fun handleEmailUsers(consuming: String): Set<EmailUser> {
-                            if (!consuming.startsWith("((")) throw IllegalArgumentException("Not a valid email user list")
-
-                            var parenCount = 0
-                            val content = buildString {
-                                for (char in consuming) {
-                                    if (char == '(') parenCount++
-                                    if (char == ')') parenCount--
-                                    append(char)
-                                    if (parenCount == 0) break
-                                }
-                            }
-
-                            val regex = Regex("\\((\"([^\"]+)\"|NIL)\\s+NIL\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\)")
-                            return regex.findAll(content).map { match ->
-                                val (name, _, mailbox, host) = match.destructured
-                                EmailUser("$mailbox@$host", name.takeIf { it != "NIL" })
-                            }.toSet()
-                        }
-
-                        fun parseEmailField(
-                            consuming: String,
-                            getter: () -> Set<EmailUser>?,
-                            setter: (Set<EmailUser>) -> Unit
-                        ): String {
-                            val trimmed = consuming.dropWhile { it == ' ' }
-                            return if (trimmed.startsWith("NIL")) {
-                                setter(emptySet())
-                                trimmed.removePrefix("NIL").dropWhile { it == ' ' }
-                            } else {
-                                val raw = trimmed.substringBefore("))") + "))"
-                                setter((getter() ?: emptySet()) + handleEmailUsers(raw))
-                                trimmed.removePrefix(raw).dropWhile { it == ' ' }
-                            }
-                        }
-
-                        listOf(
-                            { email.fromValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.fromValue = Optional.Set(v)
-                            },
-                            { email.sendersValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.sendersValue = Optional.Set(v)
-                            },
-                            { email.replyToValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.replyToValue = Optional.Set(v)
-                            },
-                            { email.toValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.toValue = Optional.Set(v)
-                            },
-                            { email.ccValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.ccValue = Optional.Set(v)
-                            },
-                            { email.bccValue.getOrNull() } to { v: Set<EmailUser> ->
-                                email.bccValue = Optional.Set(v)
-                            }
-                        ).forEach { (getter, setter) ->
-                            consuming = parseEmailField(consuming, getter, setter)
-                        }
-
-                        if (consuming.startsWith("NIL ")) {
-                            email.inReplyToValue = Optional.Set(null)
-                            consuming = consuming.substringAfter("NIL ")
-                        } else {
-                            consuming = consuming.removePrefix("\"")
-                            val inReplyTo = consuming.substringBefore("\"")
-                            email.inReplyToValue = Optional.Set(inReplyTo)
-                            consuming = consuming
-                                .removePrefix(inReplyTo)
-                                .removePrefix("\"")
-                                .removePrefix(" ")
-                        }
-
-                        if (consuming.startsWith("NIL")) {
-                            email.messageIdValue = Optional.Set("overmail-generated-id:" + ("${date.toInstant(offset).toEpochMilliseconds()}$subject${email.inReplyTo.await()}${email.from.await().map { it.address }.sorted().distinct().joinToString("")}").sha1())
-                            consuming = consuming
-                                .substringAfter("NIL")
-                                .trimStart()
-                        } else {
-                            val messageIdRaw = simpleQuoteRegex.find(consuming)?.value!!
-                            email.messageIdValue = Optional.Set(
-                                messageIdRaw
-                                    .removePrefix("\"<")
-                                    .removeSuffix(">\"")
-                            )
-                            consuming = consuming
-                                .removePrefix(messageIdRaw)
-                        }
-
-                        consuming = consuming
-                            .removePrefix(")")
-                            .trim()
-
-                        emails.add(email)
-                        continue
-                    }
-
-                    if (consuming == ")") break
-
-                    throw IllegalArgumentException("Could not parse FETCH response")
-                }
+            val parser = FetchResponseParser { response.response.receive() }
+            val parsed = try {
+                parser.parse(line)
             } catch (e: Exception) {
                 logger.error(buildString {
                     appendLine("Failed to parse FETCH response:")
                     if (config.dumpMailOnError) {
-                        appendLine(line)
-                        appendLine(" ".repeat(line.length - consuming.length) + "^-- error occurred around here")
-                        appendLine(email.toString())
+                        appendLine(parser.line)
+                        val consumedChars = (parser.line.length - parser.remaining.length).coerceAtLeast(0)
+                        appendLine(" ".repeat(consumedChars) + "^-- error occurred around here")
+                        appendLine(parser.partialResult().toString())
                     }
                     else appendLine("Enable dumpMailOnError to see email details")
                 })
                 throw e
             }
+
+            // Only responses carrying an ENVELOPE become mails, everything else is ignored.
+            val envelope = parsed.envelope ?: return@consumeEach
+
+            emails.add(Email(folder = this@ImapFolder).apply {
+                parsed.flags?.let { flagsValue = Optional.Set(it) }
+                parsed.uid?.let { uidValue = Optional.Set(it) }
+                sentAtValue = Optional.Set(envelope.sentAt)
+                subjectValue = Optional.Set(envelope.subject)
+                fromValue = Optional.Set(envelope.from)
+                sendersValue = Optional.Set(envelope.senders)
+                replyToValue = Optional.Set(envelope.replyTo)
+                toValue = Optional.Set(envelope.to)
+                ccValue = Optional.Set(envelope.cc)
+                bccValue = Optional.Set(envelope.bcc)
+                inReplyToValue = Optional.Set(envelope.inReplyTo)
+                messageIdValue = Optional.Set(envelope.messageId)
+            })
         }
 
         return emails

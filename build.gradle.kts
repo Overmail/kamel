@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.maven.publish)
+    alias(libs.plugins.kotest)
 }
 
 group = "es.jvbabi.overmail"
@@ -21,6 +22,13 @@ dependencies {
     implementation(libs.eclipse.angus.jakarta)
 
     testImplementation(libs.logback.classic)
+    testImplementation(libs.kotest.runner.junit5)
+    testImplementation(libs.kotest.assertions.core)
+}
+
+kotest {
+    // Adds the standalone "kotest" task; without it the plugin fails because the property has no default.
+    customGradleTask = true
 }
 
 tasks.test {
