@@ -64,7 +64,7 @@ class ImapFolder(
     }
 
     suspend fun getIdByUid(uid: Long): Int? {
-        val response = getClient().execute("SEARCH UID $uid").await()
+        val response = getClient().execute("SEARCH UID $uid")
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return null
             else if (line.uppercase().startsWith("* SEARCH")) {
@@ -111,7 +111,10 @@ class ImapFolder(
         if (command.last() == ' ') command.deleteCharAt(command.lastIndex)
         command.append(")")
 
-        val response = getClient().execute(command.toString()).await()
+        // No await() here: the reader job fills a buffered channel, so awaiting it before consuming
+        // deadlocks as soon as the response exceeds the channel capacity. consumeEach already runs
+        // until the job completes and closes the channel.
+        val response = getClient().execute(command.toString())
         response.response.consumeEach { line ->
             var line = line // Make it mutable
             if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach
@@ -154,8 +157,10 @@ class ImapFolder(
                         val uid = consuming.substringBefore(" ").toLongOrNull()
                             ?: throw IllegalArgumentException("Could not parse UID in $line")
                         email.uidValue = Optional.Set(uid)
+                        // UID may be the last item in the response; without an explicit missing
+                        // delimiter value substringAfter would return the UID itself and fail to parse.
                         consuming = consuming
-                            .substringAfter(" ").trim()
+                            .substringAfter(" ", "").trim()
                         continue
                     }
 
