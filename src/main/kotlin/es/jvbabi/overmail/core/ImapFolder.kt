@@ -4,6 +4,7 @@ import es.jvbabi.overmail.parser.FetchResponseParser
 import es.jvbabi.overmail.parser.SearchResponseParser
 import es.jvbabi.overmail.parser.buildFetchCommand
 import es.jvbabi.overmail.util.Optional
+import es.jvbabi.overmail.util.quoteImap
 import kotlinx.coroutines.channels.consumeEach
 import org.slf4j.LoggerFactory
 
@@ -15,7 +16,9 @@ class ImapFolder(
 ): ClosableClientPool(
     factory = {
         imapClient.getClient(requireNew = true).apply {
-            this.execute("SELECT ${path.joinToString(delimiter)}")
+            // Quoted and awaited: an unquoted name with a space is read as two arguments and the
+            // server answers BAD, which used to surface as a hang on the next command instead.
+            this.execute("SELECT ${path.joinToString(delimiter).quoteImap()}").await()
         }
     },
     name = "ImapFolder/${path.joinToString(delimiter)}"
@@ -92,9 +95,8 @@ class ImapFolder(
 
         val command = buildFetchCommand(config, from, to)
 
-        // No await() here: the reader job fills a buffered channel, so awaiting it before consuming
-        // deadlocks as soon as the response exceeds the channel capacity. consumeEach already runs
-        // until the job completes and closes the channel.
+        // No await() here: it drains the response, and the lines are needed below. consumeEach
+        // already runs until the job completes and closes the channel.
         val response = getClient().execute(command)
         response.response.consumeEach { line ->
             if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach

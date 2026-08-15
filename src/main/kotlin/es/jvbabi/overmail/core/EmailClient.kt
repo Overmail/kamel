@@ -1,6 +1,8 @@
 package es.jvbabi.overmail.core
 
 import es.jvbabi.overmail.parser.FolderListParser
+import es.jvbabi.overmail.parser.ImapStatus
+import es.jvbabi.overmail.parser.TaggedResponseParser
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.tls.*
@@ -97,19 +99,31 @@ data class SocketInstance(
         if (isDebug) println("SI $id > " + message.trim())
 
         var isCancelled = false
+        var failure: ImapCommandException? = null
 
         val job = coroutineScope.launch {
             while (!isCancelled) {
                 val line = this@SocketInstance.input.readLine() ?: break
                 if (isDebug) println("SI $id < $line")
                 channel.send(line)
-                if (line.startsWith("$commandIdString OK")) break
+                // NO and BAD terminate the command just like OK. Without them the loop keeps
+                // reading, commandMutex is never unlocked and every later command on this socket
+                // blocks forever.
+                when (TaggedResponseParser.parse(line, commandIdString)) {
+                    ImapStatus.OK -> break
+                    ImapStatus.NO, ImapStatus.BAD -> {
+                        failure = ImapCommandException(message, line)
+                        break
+                    }
+                    null -> Unit
+                }
             }
         }.also {
             it.invokeOnCompletion {
                 commandMutex.unlock()
-                isDone.complete(Unit)
-                channel.close()
+                val cause = failure
+                if (cause == null) isDone.complete(Unit) else isDone.completeExceptionally(cause)
+                channel.close(cause)
             }
         }
 
@@ -136,7 +150,16 @@ data class SocketInstance(
         private val done: Deferred<Unit>,
         val cancel: suspend () -> Unit
     ) {
+        /**
+         * Waits for the tagged completion of the command and discards its response.
+         *
+         * @throws ImapCommandException if the server answered with `NO` or `BAD`
+         */
         suspend fun await(): CommandResponse {
+            // Draining is part of awaiting: the reader job fills a bounded channel and only
+            // completes once every line was handed over, so an unread response longer than the
+            // buffer would block the job - and with it the socket - forever.
+            response.consumeEach { }
             done.await()
             return this
         }
