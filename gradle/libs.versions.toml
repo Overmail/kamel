@@ -1,8 +1,10 @@
 [versions]
-kotlin = "2.2.10"
-kotlinx-datetime = "0.7.1"
-ktor = "3.3.0"
-logback = "1.5.18"
+kotlin = "2.4.10"
+kotlinx-datetime = "0.8.0"
+ktor = "3.5.2"
+logback = "1.6.2"
+eclipse-angus-jakarta = "2.0.5"
+maven-publish = "0.37.0"
 
 [libraries]
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
@@ -10,8 +12,8 @@ ktor-network = { module = "io.ktor:ktor-network", version.ref = "ktor" }
 ktor-network-tls = { module = "io.ktor:ktor-network-tls", version.ref = "ktor" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib-jdk8", version.ref = "kotlin" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
-jakarta-mail = { module = "com.sun.mail:jakarta.mail", version = "2.0.2" }
+eclipse-angus-jakarta = { module = "org.eclipse.angus:jakarta.mail", version.ref = "eclipse-angus-jakarta" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.34.0" }
+maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }

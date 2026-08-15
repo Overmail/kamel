@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
-group = "io.github.julius-babies"
+group = "es.jvbabi.overmail"
 version = System.getenv("VERSION")?.ifBlank { null } ?: "unspecified"
 
 repositories {
@@ -17,7 +17,7 @@ dependencies {
     implementation(libs.ktor.network)
     implementation(libs.ktor.network.tls)
     implementation(libs.kotlin.stdlib)
-    implementation(libs.jakarta.mail)
+    implementation(libs.eclipse.angus.jakarta)
 
     testImplementation(libs.logback.classic)
 }
@@ -27,7 +27,7 @@ tasks.test {
 }
 
 kotlin {
-    jvmToolchain(24)
+    jvmToolchain(26)
 
     compilerOptions {
         freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
@@ -35,11 +35,11 @@ kotlin {
         freeCompilerArgs.add("-Xnested-type-aliases")
         freeCompilerArgs.add("-opt-in=kotlin.contracts.ExperimentalContracts")
 
-        jvmTarget = JvmTarget.JVM_24
+        jvmTarget = JvmTarget.JVM_26
     }
 }
 
-val sourcesJar by tasks.registering(Jar::class) {
+tasks.register<Jar>("sourcesJar") {
     archiveClassifier.set("sources")
     from(sourceSets.main.get().allSource)
 }
