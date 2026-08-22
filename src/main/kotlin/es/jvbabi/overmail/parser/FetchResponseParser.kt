@@ -180,11 +180,7 @@ internal class FetchResponseParser(
         val subjectRaw = if (remaining.startsWith("{")) {
             remaining = remaining.drop(1)
             val followingBytesCount = remaining.substringBefore("}").toInt()
-            line = nextLine()
-            remaining = line
-            val result = remaining.take(followingBytesCount)
-            remaining = remaining.drop(followingBytesCount + 1) // +2 for \r\n
-            result
+            readLiteral(followingBytesCount)
         } else {
             val subjectMatch = SUBJECT_REGEX.find(remaining)
                 ?: throw IllegalArgumentException("Could not parse subject")
@@ -252,6 +248,34 @@ internal class FetchResponseParser(
             inReplyTo = inReplyTo,
             messageId = messageId
         )
+    }
+
+    /**
+     * Reads a literal of [length] characters from the continuation lines. A folded header keeps its
+     * line breaks inside the literal, so the literal may span more than one line; the rest of the
+     * last line stays in [remaining].
+     */
+    private suspend fun readLiteral(length: Int): String {
+        val literal = StringBuilder()
+        while (true) {
+            line = nextLine()
+            val missing = length - literal.length
+            if (line.length >= missing) {
+                literal.append(line, 0, missing)
+                remaining = line.drop(missing).removePrefix(" ")
+                break
+            }
+            // The line break that split the literal is part of it, readLine() has stripped it.
+            literal.append(line).append("\r\n")
+        }
+
+        // A literal ending on a line break leaves the rest of the envelope on the following line.
+        if (remaining.isEmpty()) {
+            line = nextLine()
+            remaining = line
+        }
+
+        return literal.toString()
     }
 
     /**

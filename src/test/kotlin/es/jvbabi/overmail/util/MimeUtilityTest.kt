@@ -14,8 +14,16 @@ class MimeUtilityTest : FunSpec({
             MimeUtility.decode("") shouldBe ""
         }
 
-        test("text that only looks like an encoded word is returned unchanged") {
-            MimeUtility.decode("=?SHIFT_JIS?B?SGFsbG8=?=") shouldBe "=?SHIFT_JIS?B?SGFsbG8=?="
+        test("an encoded word with an unknown charset is returned unchanged") {
+            MimeUtility.decode("=?NOT-A-CHARSET?B?SGFsbG8=?=") shouldBe "=?NOT-A-CHARSET?B?SGFsbG8=?="
+        }
+
+        test("an encoded word with an illegal charset name is returned unchanged") {
+            MimeUtility.decode("=?UTF-8@?B?SGFsbG8=?=") shouldBe "=?UTF-8@?B?SGFsbG8=?="
+        }
+
+        test("an encoded word with an undecodable body is returned unchanged") {
+            MimeUtility.decode("=?UTF-8?B?SGFs!!8=?=") shouldBe "=?UTF-8?B?SGFs!!8=?="
         }
     }
 
@@ -30,6 +38,14 @@ class MimeUtilityTest : FunSpec({
 
         test("charset and encoding are matched case insensitively") {
             MimeUtility.decode("=?utf-8?b?SGFsbG8=?=") shouldBe "Hallo"
+        }
+
+        test("missing base64 padding is tolerated") {
+            MimeUtility.decode("=?UTF-8?B?SGFsbG8?=") shouldBe "Hallo"
+        }
+
+        test("shift_jis base64") {
+            MimeUtility.decode("=?SHIFT_JIS?B?k/qWe4zq?=") shouldBe "日本語"
         }
     }
 
@@ -50,8 +66,16 @@ class MimeUtilityTest : FunSpec({
             MimeUtility.decode("=?ISO-8859-15?Q?Gr=FC=DFe?=") shouldBe "Grüße"
         }
 
-        test("known limitation: iso-8859-15 is decoded as iso-8859-1, so 0xA4 becomes ¤ instead of €") {
-            MimeUtility.decode("=?ISO-8859-15?Q?=A4?=") shouldBe "¤"
+        test("iso-8859-15 is decoded with its own table, so 0xA4 becomes €") {
+            MimeUtility.decode("=?ISO-8859-15?Q?=A4?=") shouldBe "€"
+        }
+
+        test("windows-1252 quoted printable") {
+            MimeUtility.decode("=?Windows-1252?Q?Gr=FC=DFe_=96_=80?=") shouldBe "Grüße – €"
+        }
+
+        test("an incomplete escape inside an encoded word is dropped") {
+            MimeUtility.decode("=?UTF-8?Q?Hallo=?=") shouldBe "Hallo"
         }
     }
 
@@ -74,6 +98,57 @@ class MimeUtilityTest : FunSpec({
 
         test("plain words are kept as they are") {
             MimeUtility.decode("Re: your invoice") shouldBe "Re: your invoice"
+        }
+
+        test("an encoded word next to an unknown one keeps the separating whitespace") {
+            MimeUtility.decode("=?UTF-8?B?SGFsbG8=?= =?NOT-A-CHARSET?B?V2VsdA==?=") shouldBe
+                    "Hallo =?NOT-A-CHARSET?B?V2VsdA==?="
+        }
+    }
+
+    context("decode - folded headers") {
+        test("a folded plain text value is unfolded") {
+            MimeUtility.decode("Ein sehr langer\r\n Betreff") shouldBe "Ein sehr langer Betreff"
+        }
+
+        test("folding with a tab is unfolded to a single space") {
+            MimeUtility.decode("Ein sehr langer\r\n\tBetreff") shouldBe "Ein sehr langer Betreff"
+        }
+
+        test("a bare line feed is treated as folding") {
+            MimeUtility.decode("Ein sehr langer\n Betreff") shouldBe "Ein sehr langer Betreff"
+        }
+
+        test("a line break without folding whitespace still separates the words") {
+            MimeUtility.decode("Ein sehr langer\r\nBetreff") shouldBe "Ein sehr langer Betreff"
+        }
+
+        test("a value starting on the next line is trimmed") {
+            MimeUtility.decode("\r\n =?UTF-8?B?SGFsbG8=?=") shouldBe "Hallo"
+        }
+
+        test("folding between two encoded words is dropped") {
+            MimeUtility.decode("=?UTF-8?B?SGFsbG8=?=\r\n =?UTF-8?B?V2VsdA==?=") shouldBe "HalloWelt"
+        }
+
+        test("folding between an encoded word and plain text keeps one space") {
+            MimeUtility.decode("=?UTF-8?B?SGFsbG8=?=\r\n Welt") shouldBe "Hallo Welt"
+        }
+
+        test("surrounding whitespace is trimmed") {
+            MimeUtility.decode("  Betreff  ") shouldBe "Betreff"
+        }
+    }
+
+    context("decode - real world headers") {
+        // Subject of a mail sent by Outlook: starts on the line after "Subject:", folded over two
+        // lines, windows-1252 quoted printable.
+        test("folded windows-1252 subject") {
+            val subject = "\r\n =?Windows-1252?Q?Morgen_9:00_Uhr:_Start_der_HPI_Insight_Sessions_=96_Zoom?=" +
+                    "\r\n =?Windows-1252?Q?-Link_&_Infos?="
+
+            MimeUtility.decode(subject) shouldBe
+                    "Morgen 9:00 Uhr: Start der HPI Insight Sessions – Zoom-Link & Infos"
         }
     }
 
