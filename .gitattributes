@@ -1,0 +1,2 @@
+# MIME fixtures are wire format: CRLF must survive a checkout
+*.eml -text
