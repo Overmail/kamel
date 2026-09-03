@@ -144,6 +144,60 @@ data class SocketInstance(
         return response
     }
 
+    /**
+     * Executes [command] and hands the raw bytes of every literal (`{n}`) in its response to
+     * [onLiteralChunk], chunk by chunk. Everything around the literals - the untagged response
+     * lines, the closing paren, the tagged completion - is consumed and dropped.
+     *
+     * [execute] cannot do this: it is line based, hands the response over as a `Channel<String>`
+     * and therefore neither knows where a literal ends nor keeps its bytes intact. Reading the
+     * literal here, over the byte count the server announced, keeps every other command on the
+     * line based path instead of rewriting it for the sake of `BODY[]`.
+     *
+     * @throws ImapCommandException if the server answered with `NO` or `BAD`
+     */
+    internal suspend fun executeWithLiterals(command: String, onLiteralChunk: suspend (ByteArray) -> Unit) {
+        commandMutex.lock()
+        try {
+            isReady.await()
+            val commandId = lastCommandId++
+            val commandIdString = "A${commandId.toString().padStart(3, '0')}"
+            val message = "$commandIdString $command"
+            this.output.writeStringUtf8("$message\r\n")
+            if (isDebug) println("SI $id > $message")
+
+            while (true) {
+                val line = this.input.readLine()
+                    ?: throw IOException("Connection closed while reading the response to $message")
+                if (isDebug) println("SI $id < $line")
+                when (TaggedResponseParser.parse(line, commandIdString)) {
+                    ImapStatus.OK -> return
+                    ImapStatus.NO, ImapStatus.BAD -> throw ImapCommandException(message, line)
+                    null -> Unit
+                }
+                val length = LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+                readLiteral(length, onLiteralChunk)
+            }
+        } finally {
+            commandMutex.unlock()
+        }
+    }
+
+    /**
+     * Reads exactly [length] bytes - the size the server announced, in bytes, not in characters -
+     * and passes them on in chunks.
+     */
+    private suspend fun readLiteral(length: Int, onChunk: suspend (ByteArray) -> Unit) {
+        var remaining = length
+        val buffer = ByteArray(LITERAL_CHUNK_SIZE)
+        while (remaining > 0) {
+            val size = minOf(remaining, buffer.size)
+            this.input.readFully(buffer, 0, size)
+            onChunk(buffer.copyOf(size))
+            remaining -= size
+        }
+    }
+
     class CommandResponse(
         val commandId: String,
         val response: Channel<String>,
@@ -189,5 +243,17 @@ data class SocketInstance(
             this@SocketInstance.coroutineScope.cancel()
             this@SocketInstance.socket.close()
         }
+    }
+
+    companion object {
+        /**
+         * A literal announces its size in bytes at the end of a response line, e.g.
+         * `* 12 FETCH (BODY[] {5678}`.
+         *
+         * @see <a href="https://www.rfc-editor.org/rfc/rfc3501#section-4.3">RFC 3501 - 4.3. Literals</a>
+         */
+        private val LITERAL_LENGTH_REGEX = Regex("""\{(\d+)\+?}$""")
+
+        private const val LITERAL_CHUNK_SIZE = 8 * 1024
     }
 }
