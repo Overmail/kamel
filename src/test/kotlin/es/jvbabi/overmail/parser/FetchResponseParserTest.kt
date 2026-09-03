@@ -29,7 +29,11 @@ private fun envelopeLine(
 /** A parser that fails if a continuation line is requested. */
 private fun newParser() = FetchResponseParser()
 
-/** A parser that hands out [lines] one by one when a literal continuation is requested. */
+/**
+ * A parser that hands out [lines] one by one when a literal is requested: first the literal itself,
+ * then what followed it on its line - the framing [es.jvbabi.overmail.core.SocketInstance.execute]
+ * produces.
+ */
 private fun newParser(vararg lines: String): FetchResponseParser {
     val remaining = lines.toMutableList()
     return FetchResponseParser { remaining.removeFirst() }
@@ -172,9 +176,10 @@ class FetchResponseParserTest : FunSpec({
 
         test("reads a subject sent as literal from the next line") {
             val line = "* 1 FETCH (UID 7 ENVELOPE (\"Mon, 5 May 2025 14:03:12 +0200\" {12}"
-            val continuation = "Hallo Welt!! ($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")"
+            // The literal arrives as one item, the rest of its line as the next one.
+            val continuation = listOf("Hallo Welt!!", " ($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")")
 
-            val parsed = newParser(continuation).parse(line)
+            val parsed = newParser(*continuation.toTypedArray()).parse(line)
             val envelope = parsed.envelope.shouldNotBeNull()
 
             parsed.uid shouldBe 7L
@@ -185,8 +190,9 @@ class FetchResponseParserTest : FunSpec({
         test("reads a literal subject that is folded over two lines") {
             val line = "* 1 FETCH (UID 7 ENVELOPE (\"Mon, 5 May 2025 14:03:12 +0200\" {27}"
             val continuation = listOf(
-                "=?UTF-8?B?SGFsbG8=?=",
-                " Welt ($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")"
+                // 27 bytes: the line break between the two halves is part of the literal.
+                "=?UTF-8?B?SGFsbG8=?=\r\n Welt",
+                " ($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")"
             )
 
             val envelope = newParser(*continuation.toTypedArray()).parse(line).envelope.shouldNotBeNull()
@@ -199,6 +205,8 @@ class FetchResponseParserTest : FunSpec({
             val line = "* 1 FETCH (UID 7 ENVELOPE (\"Mon, 5 May 2025 14:03:12 +0200\" {12}"
             val continuation = listOf(
                 "Hallo Welt!!",
+                // Nothing left on the line the literal ended on.
+                "",
                 "($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")"
             )
 
@@ -210,9 +218,9 @@ class FetchResponseParserTest : FunSpec({
 
         test("reads an empty literal subject") {
             val line = "* 1 FETCH (UID 7 ENVELOPE (\"Mon, 5 May 2025 14:03:12 +0200\" {0}"
-            val continuation = "($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")"
+            val continuation = listOf("", "($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\")")
 
-            val envelope = newParser(continuation).parse(line).envelope.shouldNotBeNull()
+            val envelope = newParser(*continuation.toTypedArray()).parse(line).envelope.shouldNotBeNull()
 
             envelope.subject shouldBe ""
             envelope.from shouldBe setOf(EmailUser("jane@example.org", "Jane Doe"))
