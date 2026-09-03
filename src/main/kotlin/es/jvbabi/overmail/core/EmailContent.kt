@@ -1,11 +1,7 @@
 package es.jvbabi.overmail.core
 
-import es.jvbabi.overmail.util.MimeContent
-import jakarta.mail.BodyPart
-import jakarta.mail.Multipart
 import jakarta.mail.Session
 import jakarta.mail.internet.MimeMessage
-import jakarta.mail.internet.MimePart
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterNot
@@ -65,45 +61,7 @@ class EmailContent(
         // ignores the properties passed here as soon as anything else created one first.
         val message = MimeMessage(Session.getInstance(Properties()), pipeIn)
 
-        fun handlePart(part: Any) {
-            when (part) {
-                is String -> textStream.write(part.toByteArray())
-
-                is Multipart -> {
-                    for (i in 0 until part.count) {
-                        handlePart(part.getBodyPart(i))
-                    }
-                }
-
-                is BodyPart -> {
-                    val disposition = part.disposition?.lowercase()
-                    if (disposition != null && disposition == "attachment") return
-
-                    val contentType = part.contentType.lowercase()
-                    val content = if (part is MimePart) MimeContent.of(part) else part.content
-
-                    when {
-                        contentType.contains("text/plain") && content is String -> {
-                            textStream.write(content.toByteArray())
-                        }
-
-                        contentType.contains("text/html") && content is String -> {
-                            htmlStream.write(content.toByteArray())
-                        }
-
-                        content is Multipart -> {
-                            handlePart(content)
-                        }
-
-                        content is BodyPart -> {
-                            handlePart(content)
-                        }
-                    }
-                }
-            }
-        }
-
-        handlePart(MimeContent.of(message))
+        EmailBody.write(message, textStream, htmlStream)
 
         rawStream.flush()
         textStream.flush()
