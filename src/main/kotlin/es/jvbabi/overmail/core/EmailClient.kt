@@ -117,6 +117,11 @@ data class SocketInstance(
                     }
                     null -> Unit
                 }
+                // A literal is framed here, on the socket, and handed over as one item: {n} counts
+                // bytes, while readLine() has already decoded them, so splitting the literal off a
+                // line would cut it at the wrong place as soon as it carries non ASCII bytes.
+                val length = LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+                channel.send(readLiteral(length).toString(Charsets.UTF_8))
             }
         }.also {
             it.invokeOnCompletion {
@@ -176,7 +181,7 @@ data class SocketInstance(
                     null -> Unit
                 }
                 val length = LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: continue
-                readLiteral(length, onLiteralChunk)
+                streamLiteral(length, onLiteralChunk)
             }
         } finally {
             commandMutex.unlock()
@@ -184,10 +189,18 @@ data class SocketInstance(
     }
 
     /**
-     * Reads exactly [length] bytes - the size the server announced, in bytes, not in characters -
-     * and passes them on in chunks.
+     * Reads exactly [length] bytes - the size the server announced, in bytes, not in characters.
+     *
+     * The literal is buffered as a whole; the commands going through [execute] carry envelopes and
+     * header fields, not message bodies. [executeWithLiterals] streams instead.
      */
-    private suspend fun readLiteral(length: Int, onChunk: suspend (ByteArray) -> Unit) {
+    private suspend fun readLiteral(length: Int): ByteArray =
+        ByteArray(length).also { this.input.readFully(it, 0, length) }
+
+    /**
+     * Reads a literal of [length] bytes and passes it on in chunks.
+     */
+    private suspend fun streamLiteral(length: Int, onChunk: suspend (ByteArray) -> Unit) {
         var remaining = length
         val buffer = ByteArray(LITERAL_CHUNK_SIZE)
         while (remaining > 0) {

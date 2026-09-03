@@ -46,7 +46,8 @@ internal data class ParsedFetchItem(
  * A parser instance handles exactly one response line (plus its literal continuation lines) and keeps
  * [line] and [remaining] around afterwards so callers can point at the position a failure occurred at.
  *
- * @param nextLine supplies the next response line, used when the server sends a literal (`{42}`).
+ * @param nextLine supplies the next item of the response: the next line, or the literal itself
+ * right after one was announced (`{42}`).
  */
 internal class FetchResponseParser(
     private val nextLine: suspend () -> String = { error("No continuation line available") }
@@ -178,9 +179,7 @@ internal class FetchResponseParser(
         val sentAt = date.toInstant(offset)
 
         val subjectRaw = if (remaining.startsWith("{")) {
-            remaining = remaining.drop(1)
-            val followingBytesCount = remaining.substringBefore("}").toInt()
-            readLiteral(followingBytesCount)
+            readLiteral()
         } else {
             val subjectMatch = SUBJECT_REGEX.find(remaining)
                 ?: throw IllegalArgumentException("Could not parse subject")
@@ -251,23 +250,18 @@ internal class FetchResponseParser(
     }
 
     /**
-     * Reads a literal of [length] characters from the continuation lines. A folded header keeps its
-     * line breaks inside the literal, so the literal may span more than one line; the rest of the
-     * last line stays in [remaining].
+     * Takes the literal the server announced with `{n}`.
+     *
+     * The length is not counted here: `{n}` counts bytes, and by the time a response reaches this
+     * parser it has been decoded to text already. The literal is cut off the socket over its byte
+     * count instead, so it arrives as one item - line breaks of a folded header included - and
+     * whatever followed it on the same line arrives as the next one.
      */
-    private suspend fun readLiteral(length: Int): String {
-        val literal = StringBuilder()
-        while (true) {
-            line = nextLine()
-            val missing = length - literal.length
-            if (line.length >= missing) {
-                literal.append(line, 0, missing)
-                remaining = line.drop(missing).removePrefix(" ")
-                break
-            }
-            // The line break that split the literal is part of it, readLine() has stripped it.
-            literal.append(line).append("\r\n")
-        }
+    private suspend fun readLiteral(): String {
+        val literal = nextLine()
+
+        line = nextLine()
+        remaining = line.removePrefix(" ")
 
         // A literal ending on a line break leaves the rest of the envelope on the following line.
         if (remaining.isEmpty()) {
@@ -275,7 +269,7 @@ internal class FetchResponseParser(
             remaining = line
         }
 
-        return literal.toString()
+        return literal
     }
 
     /**

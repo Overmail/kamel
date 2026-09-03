@@ -186,4 +186,36 @@ class SocketInstanceTest : FunSpec({
             scope.cancel()
         }
     }
+    test("a literal is handed over as one item, framed by its byte count") {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var server: ServerSocket? = null
+        try {
+            withTimeout(10.seconds) {
+                // 17 characters, 20 bytes: counting characters would take three bytes of the
+                // following field into the literal.
+                val subject = "Grüße aus München"
+                val head = "* 1 FETCH (ENVELOPE (\"date\" {${subject.toByteArray(Charsets.UTF_8).size}}\r\n"
+                server = scope.startRawServer { tag, _ ->
+                    head.toByteArray(Charsets.UTF_8) +
+                            subject.toByteArray(Charsets.UTF_8) +
+                            " NIL))\r\n$tag OK FETCH completed\r\n".toByteArray(Charsets.US_ASCII)
+                }
+                val instance = connect(server)
+
+                val items = mutableListOf<String>()
+                instance.execute("FETCH 1 (ENVELOPE)").response.consumeEach { items += it }
+
+                items shouldBe listOf(
+                    head.trimEnd('\r', '\n'),
+                    subject,
+                    " NIL))",
+                    "A000 OK FETCH completed"
+                )
+                instance.close()
+            }
+        } finally {
+            server?.close()
+            scope.cancel()
+        }
+    }
 })
