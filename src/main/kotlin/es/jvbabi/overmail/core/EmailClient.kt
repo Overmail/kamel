@@ -60,7 +60,7 @@ class ImapClient(
 
             val folders = mutableListOf<ImapFolder>()
             response.response.consumeEach { line ->
-                if (line.startsWith("${response.commandId} OK LIST", ignoreCase = true)) return@consumeEach
+                if (TaggedResponseParser.parse(line, response.commandId) != null) return@consumeEach
                 val folder = FolderListParser.parse(line)
                 if (folder != null) {
                     folders.add(ImapFolder(this, folder.path, folder.delimiter, folder.specialType))
