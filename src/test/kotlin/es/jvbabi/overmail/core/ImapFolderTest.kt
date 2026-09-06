@@ -4,6 +4,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.network.sockets.InetSocketAddress
 import io.ktor.network.sockets.ServerSocket
+import io.kotest.matchers.collections.shouldContainExactly
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -70,6 +71,81 @@ class ImapFolderTest : FunSpec({
         } finally {
             server?.close()
             scope.cancel()
+        }
+    }
+
+    // CommuniGate Pro answers "A003 OK completed" - RFC 3501 leaves the text after the status to
+    // the server, so nothing may be matched beyond tag and status.
+    context("a tagged completion that does not repeat the command name") {
+        val respond: (String, String) -> List<String> = { tag, command ->
+            when {
+                command.startsWith("LIST") -> listOf(
+                    """* LIST (\HasNoChildren) "/" "INBOX"""",
+                    "$tag OK completed"
+                )
+                command.startsWith("SEARCH UID 8") -> listOf("* SEARCH 2", "$tag OK completed")
+                command.startsWith("SEARCH") -> listOf("* SEARCH 1 2", "$tag OK completed")
+                command.startsWith("FETCH") -> listOf(
+                    """* 1 FETCH (UID 7 ENVELOPE ("Mon, 5 May 2025 14:03:12 +0200" "Hi" ((NIL NIL "jane" "example.org")) NIL NIL ((NIL NIL "john" "example.com")) NIL NIL NIL "<x@example.org>"))""",
+                    """* 2 FETCH (UID 8 ENVELOPE ("Mon, 5 May 2025 14:04:12 +0200" "Ho" ((NIL NIL "jane" "example.org")) NIL NIL ((NIL NIL "john" "example.com")) NIL NIL NIL "<y@example.org>"))""",
+                    "$tag OK completed"
+                )
+                else -> listOf("$tag OK completed")
+            }
+        }
+
+        /** Runs [block] against a fake server that never repeats the command name. */
+        suspend fun withClient(block: suspend (ImapClient) -> Unit) {
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            var server: ServerSocket? = null
+            try {
+                withTimeout(30.seconds) {
+                    val running = scope.startServer(respond)
+                    server = running
+                    block(
+                        ImapClient(
+                            host = "127.0.0.1",
+                            port = (running.localAddress as InetSocketAddress).port,
+                            ssl = false,
+                            username = "user",
+                            password = "password",
+                            coroutineScope = scope
+                        )
+                    )
+                }
+            } finally {
+                server?.close()
+                scope.cancel()
+            }
+        }
+
+        test("is recognised by getMailIds") {
+            withClient { client ->
+                ImapFolder(client, listOf("INBOX"), "/", null).getMailIds() shouldContainExactly listOf(1, 2)
+            }
+        }
+
+        test("is recognised by getIdByUid") {
+            withClient { client ->
+                ImapFolder(client, listOf("INBOX"), "/", null).getIdByUid(8L) shouldBe 2
+            }
+        }
+
+        test("is recognised by getFolders") {
+            withClient { client ->
+                client.getFolders().map { it.fullName } shouldContainExactly listOf("INBOX")
+            }
+        }
+
+        test("is not handed to the FETCH parser") {
+            withClient { client ->
+                val mails = ImapFolder(client, listOf("INBOX"), "/", null).getMails {
+                    getAll()
+                    all()
+                }
+                mails.map { it.uid.await() } shouldContainExactly listOf(7L, 8L)
+                mails.map { it.subject.await() } shouldContainExactly listOf("Hi", "Ho")
+            }
         }
     }
 })

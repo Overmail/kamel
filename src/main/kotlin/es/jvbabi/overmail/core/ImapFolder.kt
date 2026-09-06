@@ -1,7 +1,9 @@
 package es.jvbabi.overmail.core
 
 import es.jvbabi.overmail.parser.FetchResponseParser
+import es.jvbabi.overmail.parser.ImapStatus
 import es.jvbabi.overmail.parser.SearchResponseParser
+import es.jvbabi.overmail.parser.TaggedResponseParser
 import es.jvbabi.overmail.parser.buildFetchCommand
 import es.jvbabi.overmail.util.Optional
 import es.jvbabi.overmail.util.quoteImap
@@ -49,18 +51,32 @@ class ImapFolder(
         val response = getClient().execute("SEARCH ALL")
         val ids = mutableListOf<Int>()
         response.response.consumeEach { line ->
-            if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return ids
+            // Only tag and status are matched: what follows them is up to the server. CommuniGate
+            // answers "A003 OK completed" without repeating the command name, and matching on
+            // "<tag> OK SEARCH" made every folder look empty there.
+            when (TaggedResponseParser.parse(line, response.commandId)) {
+                ImapStatus.OK -> return ids
+                // The channel is closed with an ImapCommandException right after, so let
+                // consumeEach throw it instead of returning a half read result as a success.
+                ImapStatus.NO, ImapStatus.BAD -> return@consumeEach
+                null -> Unit
+            }
             val parsed = SearchResponseParser.parseIds(line)
             if (parsed != null) ids.addAll(parsed)
             else logger.error("Could not get mail ids: $line")
         }
-        return emptyList()
+        return ids
     }
 
     suspend fun getIdByUid(uid: Long): Int? {
         val response = getClient().execute("SEARCH UID $uid")
         response.response.consumeEach { line ->
-            if (line.uppercase().startsWith("${response.commandId} OK SEARCH")) return null
+            when (TaggedResponseParser.parse(line, response.commandId)) {
+                // Completed without an untagged SEARCH result: the uid is not in this folder.
+                ImapStatus.OK -> return null
+                ImapStatus.NO, ImapStatus.BAD -> return@consumeEach
+                null -> Unit
+            }
             val parsed = SearchResponseParser.parseIds(line)
             if (parsed != null) return parsed.firstOrNull()
             else logger.error("Could not get mail id by uid: $line")
@@ -99,7 +115,9 @@ class ImapFolder(
         // already runs until the job completes and closes the channel.
         val response = getClient().execute(command)
         response.response.consumeEach { line ->
-            if (line.uppercase().startsWith("${response.commandId} OK FETCH")) return@consumeEach
+            // The tagged completion is not a FETCH response; handing it to the parser below
+            // would only work by accident.
+            if (TaggedResponseParser.parse(line, response.commandId) != null) return@consumeEach
 
             val parser = FetchResponseParser { response.response.receive() }
             val parsed = try {
