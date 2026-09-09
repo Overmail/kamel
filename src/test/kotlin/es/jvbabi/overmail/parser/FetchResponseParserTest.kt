@@ -85,6 +85,21 @@ class FetchResponseParserTest : FunSpec({
         test("fails on a non numeric uid") {
             shouldThrow<IllegalArgumentException> { newParser().parse("* 1 FETCH (UID abc)") }
         }
+
+        test("parses a uid that ends on the closing parenthesis of the response") {
+            // A response containing a literal is not pre-stripped of its trailing ")", so a UID
+            // behind the envelope still carries it.
+            val line = "* 1 FETCH (ENVELOPE (\"Mon, 5 May 2025 14:03:12 +0200\" {12}"
+            val continuation = listOf(
+                "Hallo Welt!!",
+                " ($JANE) NIL NIL NIL NIL NIL NIL \"<x@example.org>\") UID 42)"
+            )
+
+            val parsed = newParser(*continuation.toTypedArray()).parse(line)
+
+            parsed.uid shouldBe 42L
+            parsed.envelope.shouldNotBeNull().subject shouldBe "Hallo Welt!!"
+        }
     }
 
     context("FLAGS and UID combined") {
