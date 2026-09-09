@@ -124,13 +124,15 @@ internal class FetchResponseParser(
             .removePrefix("UID ")
             .trim()
 
-        val uid = remaining.substringBefore(" ").toLongOrNull()
+        val uid = remaining
+            .takeWhile { it.isDigit() }
+            .toLongOrNull()
             ?: throw IllegalArgumentException("Could not parse UID in $line")
 
-        // UID may be the last item in the response; without an explicit missing
-        // delimiter value substringAfter would return the UID itself and fail to parse.
         remaining = remaining
-            .substringAfter(" ", "").trim()
+            .dropWhile { it.isDigit() }
+            .trim()
+
         return uid
     }
 
