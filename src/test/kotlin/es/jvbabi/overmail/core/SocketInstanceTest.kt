@@ -3,15 +3,45 @@ package es.jvbabi.overmail.core
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.ServerSocket
+import io.ktor.network.sockets.aSocket
+import io.ktor.network.sockets.openReadChannel
+import io.ktor.network.sockets.openWriteChannel
+import io.ktor.utils.io.readLine
+import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
+
+/**
+ * A server that answers the first command halfway and then drops the connection, the way one
+ * enforcing a connection limit does.
+ */
+private suspend fun CoroutineScope.startDroppingServer(): ServerSocket {
+    val server = aSocket(SelectorManager(Dispatchers.IO)).tcp().bind("127.0.0.1", 0)
+    launch {
+        while (true) {
+            val socket = server.accept()
+            launch {
+                val input = socket.openReadChannel()
+                val output = socket.openWriteChannel(autoFlush = true)
+                output.writeStringUtf8("* OK IMAP4rev1 ready\r\n")
+                input.readLine()
+                output.writeStringUtf8("* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n")
+                output.flush()
+                socket.close()
+            }
+        }
+    }
+    return server
+}
 
 /**
  * Drives [SocketInstance] against [startServer]. Every test runs under a timeout, because the bugs
@@ -82,6 +112,44 @@ class SocketInstanceTest : FunSpec({
             scope.cancel()
         }
     }
+    test("a connection dropped mid response fails the command") {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var server: ServerSocket? = null
+        try {
+            withTimeout(10.seconds) {
+                server = scope.startDroppingServer()
+                val instance = connect(server)
+
+                // Used to end the command as a success: the reader stopped at the end of the
+                // stream, and the caller took the response it got so far for the whole answer.
+                shouldThrow<ImapConnectionClosedException> { instance.execute("LIST \"\" \"*\"").await() }
+                instance.close()
+            }
+        } finally {
+            server?.close()
+            scope.cancel()
+        }
+    }
+
+    test("a command on a closed instance fails instead of answering nothing") {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var server: ServerSocket? = null
+        try {
+            withTimeout(10.seconds) {
+                server = scope.startServer { tag, _ -> listOf("$tag OK completed") }
+                val instance = connect(server)
+                instance.execute("NOOP").await()
+                instance.close()
+
+                instance.isAlive shouldBe false
+                shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP").await() }
+            }
+        } finally {
+            server?.close()
+            scope.cancel()
+        }
+    }
+
     test("a literal is read over its announced byte count") {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         var server: ServerSocket? = null

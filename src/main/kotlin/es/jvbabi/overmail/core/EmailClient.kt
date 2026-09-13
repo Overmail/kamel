@@ -12,7 +12,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.sync.Mutex
 import org.slf4j.LoggerFactory
-import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
 class ImapClient(
@@ -50,27 +49,29 @@ class ImapClient(
     }
 
     suspend fun getFolders(onlyRoot: Boolean = false): List<ImapFolder> {
-        this.getClient().use { socketInstance ->
-            val response = socketInstance.execute(buildString {
-                append("LIST \"\" \"")
-                if (onlyRoot) append("\"")
-                else append("*")
-                append("\"")
-            })
+        // Borrowed, not owned: closing it here left the instance in the pool, and the next command
+        // got the dead socket handed back -- its LIST answered nothing, so the account looked like
+        // it had no folders at all.
+        val socketInstance = this.getClient()
+        val response = socketInstance.execute(buildString {
+            append("LIST \"\" \"")
+            if (onlyRoot) append("\"")
+            else append("*")
+            append("\"")
+        })
 
-            val folders = mutableListOf<ImapFolder>()
-            response.response.consumeEach { line ->
-                if (TaggedResponseParser.parse(line, response.commandId) != null) return@consumeEach
-                val folder = FolderListParser.parse(line)
-                if (folder != null) {
-                    folders.add(ImapFolder(this, folder.path, folder.delimiter, folder.specialType))
-                    return@consumeEach
-                }
-                logger.warn("Failed to parse folder: $line")
+        val folders = mutableListOf<ImapFolder>()
+        response.response.consumeEach { line ->
+            if (TaggedResponseParser.parse(line, response.commandId) != null) return@consumeEach
+            val folder = FolderListParser.parse(line)
+            if (folder != null) {
+                folders.add(ImapFolder(this, folder.path, folder.delimiter, folder.specialType))
+                return@consumeEach
             }
-
-            return folders
+            logger.warn("Failed to parse folder: $line")
         }
+
+        return folders
     }
 }
 
@@ -87,23 +88,48 @@ data class SocketInstance(
     private var lastCommandId: Int = 0
     internal val commandMutex = Mutex()
 
+    @Volatile
+    private var isClosed = false
+
+    /** Whether this instance can still carry a command, see [ClosableClientPool.getClient]. */
+    internal val isAlive: Boolean get() = !isClosed && !input.isClosedForRead
+
     suspend fun execute(command: String): CommandResponse {
         commandMutex.lock()
-        isReady.await()
-        val commandId = lastCommandId++
-        val commandIdString = "A${commandId.toString().padStart(3, '0')}"
-        val message = "$commandIdString $command"
-        val channel = Channel<String>(Channel.BUFFERED)
-        val isDone = CompletableDeferred<Unit>()
-        this.output.writeStringUtf8("$message\r\n")
+        val commandIdString: String
+        val message: String
+        try {
+            // Before awaiting the greeting: a socket closed while waiting for one never gets it.
+            if (isClosed) throw ImapConnectionClosedException("The connection is closed, cannot run $command")
+            isReady.await()
+            val commandId = lastCommandId++
+            commandIdString = "A${commandId.toString().padStart(3, '0')}"
+            message = "$commandIdString $command"
+            this.output.writeStringUtf8("$message\r\n")
+        } catch (e: Throwable) {
+            // Nothing reads for this command yet, so the reader job below cannot unlock for it.
+            commandMutex.unlock()
+            throw e
+        }
         if (isDebug) println("SI $id > " + message.trim())
 
+        val channel = Channel<String>(Channel.BUFFERED)
+        val isDone = CompletableDeferred<Unit>()
+
         var isCancelled = false
-        var failure: ImapCommandException? = null
+        var failure: Exception? = null
 
         val job = coroutineScope.launch {
             while (!isCancelled) {
-                val line = this@SocketInstance.input.readLine() ?: break
+                val line = this@SocketInstance.input.readLine()
+                if (line == null) {
+                    // The response ended without its tagged completion: the connection is gone.
+                    // Ending the command as a success here is what made a dead socket look like an
+                    // empty answer to whatever was asked.
+                    // Unless we asked for it: a cancelled IDLE ends its response the same way.
+                    if (!isCancelled) failure = ImapConnectionClosedException("The connection closed while reading the response to $message")
+                    break
+                }
                 if (isDebug) println("SI $id < $line")
                 channel.send(line)
                 // NO and BAD terminate the command just like OK. Without them the loop keeps
@@ -173,7 +199,7 @@ data class SocketInstance(
 
             while (true) {
                 val line = this.input.readLine()
-                    ?: throw IOException("Connection closed while reading the response to $message")
+                    ?: throw ImapConnectionClosedException("The connection closed while reading the response to $message")
                 if (isDebug) println("SI $id < $line")
                 when (TaggedResponseParser.parse(line, commandIdString)) {
                     ImapStatus.OK -> return
@@ -238,7 +264,7 @@ data class SocketInstance(
         this.coroutineScope.launch {
             while (true) {
                 val line = this@SocketInstance.input.readLine() ?: run {
-                    isReady.completeExceptionally(IOException("Connection closed before server greeting"))
+                    isReady.completeExceptionally(ImapConnectionClosedException("The connection closed before the server greeting"))
                     return@launch
                 }
                 if (!isReady.isCompleted && line.startsWith("* OK")) break
@@ -252,6 +278,9 @@ data class SocketInstance(
     }
 
     override fun close() {
+        isClosed = true
+        // A command waiting for a greeting that can no longer arrive would wait forever.
+        isReady.completeExceptionally(ImapConnectionClosedException("The connection closed before the server greeting"))
         runBlocking {
             this@SocketInstance.coroutineScope.cancel()
             this@SocketInstance.socket.close()
