@@ -4,6 +4,7 @@ import es.jvbabi.overmail.util.MimeUtility
 import es.jvbabi.overmail.util.Optional
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
 import kotlin.time.Instant
 
 class EmailUser(
@@ -47,7 +48,20 @@ class EmailUser(
 class Email internal constructor(
     internal val folder: ImapFolder
 ) {
-    val content = EmailContent(this)
+    private val content = EmailContent(this)
+
+    /**
+     * The message source as the server sent it, in chunks, byte for byte.
+     */
+    fun getRawContent(): Flow<ByteArray> = content.getRawContent()
+
+    /**
+     * Fetches the message and splits it into its text body, its html body and - if
+     * [includeAttachments] is set - its attachments.
+     *
+     * @throws ImapCommandException if the server refused the FETCH
+     */
+    suspend fun getContent(includeAttachments: Boolean = false): Content = content.getContent(includeAttachments)
 
     var subjectValue: Optional<String?> = Optional.Empty()
         internal set
@@ -157,6 +171,30 @@ class Email internal constructor(
             this@Email.flagsValue.let { if (it is Optional.Set) return@async it.value }
             TODO("Use connection to download flags")
         }
+
+    class Content(
+        /** The message source, byte for byte. */
+        val raw: ByteArray,
+        /** All text bodies joined, `null` if the message has none. */
+        val text: String?,
+        /** All html bodies joined, `null` if the message has none. */
+        val html: String?,
+        /** Empty unless requested with `includeAttachments`. */
+        val attachments: List<Attachment>,
+    )
+
+    class Attachment(
+        /** Decoded file name, `null` if the part names none. */
+        val fileName: String?,
+        /** Base type in lowercase, e.g. `application/pdf`. */
+        val contentType: String,
+        /** `Content-ID` without angle brackets, referenced by `cid:` urls in the html body. */
+        val contentId: String?,
+        /** `true` for `Content-Disposition: inline`, e.g. images embedded in the html body. */
+        val isInline: Boolean,
+        /** The content with its transfer encoding already decoded. */
+        val data: ByteArray,
+    )
 
     sealed class Flag {
         abstract val value: String

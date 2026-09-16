@@ -10,6 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         name: Checkout repository
+        with:
+          lfs: true
       - uses: actions/setup-java@v5
         name: Setup Java
         with:
