@@ -1,2 +1,2 @@
-# MIME fixtures are wire format: CRLF must survive a checkout
-*.eml -text
+# MIME fixtures are wire format: CRLF must survive a checkout. Donations can be large, so they live in LFS.
+*.eml filter=lfs diff=lfs merge=lfs -text

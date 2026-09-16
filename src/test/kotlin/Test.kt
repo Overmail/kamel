@@ -29,13 +29,11 @@ fun main() {
                         }.forEach { email ->
                             println(email.subject.await())
                             println(email.flags.await())
-                            val textFile = File("./out.txt")
-                            val htmlFile = File("./out.html")
-                            val rawFile = File("./out.eml")
-                            textFile.delete()
-                            htmlFile.delete()
-                            rawFile.delete()
-                            email.content.getContent(rawFile.outputStream(), textFile.outputStream(), htmlFile.outputStream())
+                            val body = email.getContent(includeAttachments = true)
+                            File("./out.eml").writeBytes(body.raw)
+                            File("./out.txt").writeText(body.text.orEmpty())
+                            File("./out.html").writeText(body.html.orEmpty())
+                            body.attachments.forEach { println("  ${it.fileName} (${it.contentType}, ${it.data.size} bytes)") }
                         }
                         println()
                     }
@@ -104,7 +102,7 @@ fun main() {
 //                            }
 //
 //
-//                            email.content.getContent(
+//                            email.getContent(
 //                                rawStream = rawStream,
 //                                textStream = textStream,
 //                                htmlStream = htmlStream
@@ -121,8 +119,3 @@ fun main() {
 }
 
 private class MissingEnvVarException(envVar: String) : Exception("Environment variable $envVar is missing or blank")
-
-private fun waitForEnter(message: String = "Press ENTER to continue...") {
-    println(message)
-    readlnOrNull()
-}

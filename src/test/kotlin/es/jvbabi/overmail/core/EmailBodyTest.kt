@@ -7,7 +7,7 @@ import io.kotest.matchers.string.shouldStartWith
 import jakarta.mail.Session
 import jakarta.mail.internet.MimeMessage
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.util.Properties
 
 /**
@@ -29,16 +29,16 @@ private fun messageResource(name: String): MimeMessage {
     return stream.use { MimeMessage(Session.getInstance(Properties()), it) }
 }
 
-private data class Bodies(val text: String, val html: String)
+internal fun sha256(data: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(data).toHexString()
+
+private data class Bodies(val text: String, val html: String, val attachments: List<Email.Attachment>)
 
 /**
- * Routes [message] and returns what ended up in either stream.
+ * Parses [message] with attachments and returns both bodies, a missing one as an empty string.
  */
 private fun bodiesOf(message: MimeMessage): Bodies {
-    val text = ByteArrayOutputStream()
-    val html = ByteArrayOutputStream()
-    EmailBody.write(message, text, html)
-    return Bodies(text.toString(Charsets.UTF_8), html.toString(Charsets.UTF_8))
+    val parts = EmailBody.parse(message, includeAttachments = true)
+    return Bodies(parts.text.orEmpty(), parts.html.orEmpty(), parts.attachments)
 }
 
 class EmailBodyTest : FunSpec({
@@ -89,16 +89,18 @@ class EmailBodyTest : FunSpec({
             bodies.html shouldBe ""
         }
 
-        test("skips a body that is not text") {
+        test("treats a body that is not text as an attachment") {
             val bodies = bodiesOf(
                 message("Content-Type: application/json; charset=utf-8", body = """{"a":1}""")
             )
 
             bodies.text shouldBe ""
             bodies.html shouldBe ""
+            bodies.attachments.single().contentType shouldBe "application/json"
+            bodies.attachments.single().data.toString(Charsets.UTF_8) shouldBe """{"a":1}"""
         }
 
-        test("skips a body disposed as an attachment") {
+        test("treats a body disposed as an attachment as an attachment") {
             val bodies = bodiesOf(
                 message(
                     "Content-Type: text/html; charset=utf-8",
@@ -109,6 +111,17 @@ class EmailBodyTest : FunSpec({
 
             bodies.text shouldBe ""
             bodies.html shouldBe ""
+            bodies.attachments.single().fileName shouldBe "invoice.html"
+        }
+
+        test("reports a message without a body as null") {
+            val parts = EmailBody.parse(
+                message("Content-Type: text/plain; charset=utf-8", body = "Grüße"),
+                includeAttachments = false
+            )
+
+            parts.text shouldBe "Grüße"
+            parts.html shouldBe null
         }
     }
 
@@ -150,6 +163,22 @@ class EmailBodyTest : FunSpec({
             bodies.text shouldBe ""
             bodies.html shouldStartWith "\r\n<!DOCTYPE HTML>"
             bodies.html shouldContain "unser Engagement für die Qualität von Windows"
+        }
+
+        // multipart-attachments.eml was sent from a webmailer with a small, a medium and a large attachment.
+        test("splits a mail with attachments into bodies and attachments") {
+            val bodies = bodiesOf(messageResource("multipart-attachments.eml"))
+
+            bodies.text shouldStartWith "Hello, this email has a few attachments."
+            bodies.html shouldContain "this is a test email"
+            bodies.attachments.map { it.fileName } shouldBe listOf("logo_blue.svg", "Purple.heic", "Vicinae.dmg")
+            bodies.attachments.map { it.contentType } shouldBe listOf("image/svg+xml", "image/heic", "application/x-diskcopy")
+            bodies.attachments.map { it.isInline } shouldBe listOf(false, false, false)
+            bodies.attachments.map { sha256(it.data) } shouldBe listOf(
+                "250d6f077df6eec1c0bb3f6e9753863d7182618d5ed200b6a4f3bafc01b01844",
+                "4960c8e46d2d9302e4436895d3125dc9b703e9aee3904b051c8d23e7e0b7778b",
+                "db4af37676a643bd1729f2b1f3c8d667909a6d5286c9cde8053d1eae05c5670a",
+            )
         }
     }
 
@@ -228,6 +257,62 @@ class EmailBodyTest : FunSpec({
 
             bodies.text.trim() shouldBe "Grüße"
             bodies.html shouldBe ""
+        }
+    }
+
+    context("attachments") {
+        val mixed = message(
+            "Content-Type: multipart/mixed; boundary=\"outer\"",
+            body = """
+                --outer
+                Content-Type: multipart/related; boundary="inner"
+
+                --inner
+                Content-Type: text/html; charset=utf-8
+
+                <img src="cid:logo@kamel">
+                --inner
+                Content-Type: image/png
+                Content-Transfer-Encoding: base64
+                Content-ID: <logo@kamel>
+                Content-Disposition: inline
+
+                iVBORw==
+                --inner--
+                --outer
+                Content-Type: application/pdf; name="=?utf-8?Q?Rechnung_M=C3=A4rz.pdf?="
+                Content-Transfer-Encoding: base64
+                Content-Disposition: attachment
+
+                JVBERi0=
+                --outer--
+            """.trimIndent().replace("\n", "\r\n")
+        )
+
+        test("collects inline and attached parts with decoded data") {
+            val bodies = bodiesOf(mixed)
+
+            bodies.html.trim() shouldBe "<img src=\"cid:logo@kamel\">"
+            bodies.attachments.size shouldBe 2
+
+            val logo = bodies.attachments[0]
+            logo.contentType shouldBe "image/png"
+            logo.contentId shouldBe "logo@kamel"
+            logo.isInline shouldBe true
+            logo.data.toList() shouldBe listOf(0x89, 0x50, 0x4E, 0x47).map { it.toByte() }
+
+            val invoice = bodies.attachments[1]
+            invoice.contentType shouldBe "application/pdf"
+            invoice.fileName shouldBe "Rechnung März.pdf"
+            invoice.isInline shouldBe false
+            invoice.data.toString(Charsets.US_ASCII) shouldBe "%PDF-"
+        }
+
+        test("leaves attachments out unless requested") {
+            val parts = EmailBody.parse(mixed, includeAttachments = false)
+
+            parts.html?.trim() shouldBe "<img src=\"cid:logo@kamel\">"
+            parts.attachments shouldBe emptyList()
         }
     }
 })

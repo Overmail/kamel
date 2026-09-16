@@ -79,16 +79,21 @@ returns immediately for those fields.
 
 ### Reading the message body
 
-`getContent` writes the raw message, the plain text part and the HTML part into the streams you
-pass in. All three streams are written concurrently, so all of them have to be consumed.
+`getContent` returns the raw message, the plain text body and the HTML body. Attachments are
+only decoded if you ask for them.
 
 ```kotlin
-mail.content.getContent(
-    rawStream = File("mail.eml").outputStream(),
-    textStream = File("mail.txt").outputStream(),
-    htmlStream = File("mail.html").outputStream(),
-)
+val body = mail.getContent(includeAttachments = true)
+File("mail.eml").writeBytes(body.raw)
+body.text?.let { File("mail.txt").writeText(it) }
+body.html?.let { File("mail.html").writeText(it) }
+body.attachments.forEach { attachment ->
+    // attachment.contentId is referenced by cid: urls in the HTML body
+    File(attachment.fileName ?: "attachment").writeBytes(attachment.data)
+}
 ```
+
+To stream the message source instead, collect `getRawContent()`.
 
 ### Waiting for new mail (IDLE)
 

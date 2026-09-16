@@ -1,5 +1,6 @@
 package es.jvbabi.overmail.util
 
+import jakarta.mail.Part
 import jakarta.mail.internet.ContentType
 import jakarta.mail.internet.MimeBodyPart
 import jakarta.mail.internet.MimeMessage
@@ -59,6 +60,17 @@ internal object MimeContent {
 
         val raw = part.rawInputStream() ?: return part.content
         return raw.use { it.readBytes() }.toString(charsetOf(contentType, encoding))
+    }
+
+    /**
+     * Returns the decoded bytes of [part]. A part with an unsupported `Content-Transfer-Encoding` is
+     * not encoded, see [of], so its raw bytes are returned.
+     */
+    fun bytesOf(part: Part): ByteArray {
+        if (part is MimePart && !isSupportedEncoding(runCatching { part.encoding }.getOrNull())) {
+            part.rawInputStream()?.let { raw -> return raw.use { it.readBytes() } }
+        }
+        return part.inputStream.use { it.readBytes() }
     }
 
     /**

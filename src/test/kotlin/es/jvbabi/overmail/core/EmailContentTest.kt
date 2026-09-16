@@ -7,15 +7,9 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldEndWith
 import io.kotest.matchers.string.shouldNotContain
-import io.ktor.network.sockets.InetSocketAddress
-import io.ktor.network.sockets.ServerSocket
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.withTimeout
-import java.io.ByteArrayOutputStream
+import io.kotest.matchers.string.shouldStartWith
+import io.ktor.network.sockets.*
+import kotlinx.coroutines.*
 import kotlin.time.Duration.Companion.seconds
 
 private data class Streams(val raw: String, val text: String, val html: String)
@@ -37,10 +31,9 @@ private fun emailOn(server: ServerSocket, scope: CoroutineScope): Email {
 }
 
 /**
- * Serves [message] as the literal of `UID FETCH 1 BODY.PEEK[]` and returns what `getContent`
- * wrote into its three streams.
+ * Serves [message] as the literal of `UID FETCH 1 BODY.PEEK[]` and returns what `getContent` made of it.
  */
-private suspend fun fetch(message: ByteArray): Streams {
+private suspend fun fetchContent(message: ByteArray, includeAttachments: Boolean = false): Email.Content {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var server: ServerSocket? = null
     try {
@@ -50,25 +43,17 @@ private suspend fun fetch(message: ByteArray): Streams {
                 else "$tag OK completed\r\n".toByteArray(Charsets.US_ASCII)
             }
             server = running
-            val email = emailOn(running, scope)
-
-            val raw = ByteArrayOutputStream()
-            val text = ByteArrayOutputStream()
-            val html = ByteArrayOutputStream()
-            // runInterruptible: getContent blocks its thread until the message is parsed, so a hang
-            // has to be cut short by interrupting the thread - withTimeout alone cannot cancel it.
-            runInterruptible(Dispatchers.IO) { email.content.getContent(raw, text, html) }
-
-            Streams(
-                raw = raw.toString(Charsets.UTF_8),
-                text = text.toString(Charsets.UTF_8),
-                html = html.toString(Charsets.UTF_8)
-            )
+            emailOn(running, scope).getContent(includeAttachments)
         }
     } finally {
-        server?.close()
+        // NonCancellable: after a timeout the server still has to be closed.
+        withContext(NonCancellable + Dispatchers.IO) { server?.close() }
         scope.cancel()
     }
+}
+
+private suspend fun fetch(message: ByteArray): Streams = fetchContent(message).let {
+    Streams(raw = it.raw.toString(Charsets.UTF_8), text = it.text.orEmpty(), html = it.html.orEmpty())
 }
 
 private suspend fun fetch(message: String) = fetch(message.toByteArray(Charsets.UTF_8))
@@ -174,6 +159,26 @@ class EmailContentTest : FunSpec({
         streams.raw shouldBe message
     }
 
+    test("a large mail with attachments survives the literal byte for byte") {
+        val message = checkNotNull(object {}.javaClass.getResourceAsStream("/multipart-attachments.eml")).use { it.readBytes() }
+
+        val content = fetchContent(message, includeAttachments = true)
+
+        content.raw.contentEquals(message) shouldBe true
+        content.text shouldStartWith "Hello, this email has a few attachments."
+        content.attachments.map { it.fileName to it.data.size } shouldBe listOf(
+            "logo_blue.svg" to 1_059,
+            "Purple.heic" to 4_161_733,
+            "Vicinae.dmg" to 25_388_073,
+        )
+    }
+
+    test("attachments are left out by default") {
+        val message = checkNotNull(object {}.javaClass.getResourceAsStream("/multipart-attachments.eml")).use { it.readBytes() }
+
+        fetchContent(message).attachments shouldBe emptyList()
+    }
+
     test("a refused fetch fails instead of hanging") {
         // Regression to #14: the FETCH ends on NO, and neither the flow nor getContent may wait
         // for a body that never arrives.
@@ -188,14 +193,9 @@ class EmailContentTest : FunSpec({
                 server = running
                 val email = emailOn(running, scope)
 
-                shouldThrow<ImapCommandException> { email.content.getRawContent().collect { } }
+                shouldThrow<ImapCommandException> { email.getRawContent().collect { } }
 
-                val discard = ByteArrayOutputStream()
-                shouldThrow<ImapCommandException> {
-                    runInterruptible(Dispatchers.IO) {
-                        email.content.getContent(discard, ByteArrayOutputStream(), ByteArrayOutputStream())
-                    }
-                }
+                shouldThrow<ImapCommandException> { email.getContent() }
             }
         } finally {
             server?.close()
