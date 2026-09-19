@@ -26,19 +26,37 @@ class ImapClient(
 ): ClosableClientPool(
     maxPoolSize = maxConnections,
     factory = {
+        // One per connection, closed with it: a selector manager only lets go of its selector once
+        // it is closed, and one that was left open kept a Dispatchers.IO thread spinning in
+        // select() after its socket was gone. Enough of them starved every IO coroutine.
         val selectorManager = SelectorManager(coroutineScope.coroutineContext)
-        aSocket(selectorManager).tcp()
-            .connect(host, port)
-            .let { if (ssl) it.tls(coroutineScope.coroutineContext) else it }
-            .let { socket ->
-                SocketInstance(
-                    socket = socket,
-                    isDebug = debug,
-                    input = socket.openReadChannel(),
-                    output = socket.openWriteChannel(autoFlush = true)
-                )
-                    .also { it.login(username, password) }
+        val instance = try {
+            val tcpSocket = aSocket(selectorManager).tcp().connect(host, port)
+            val socket = try {
+                if (ssl) tcpSocket.tls(coroutineScope.coroutineContext) else tcpSocket
+            } catch (e: Throwable) {
+                tcpSocket.close()
+                throw e
             }
+            SocketInstance(
+                socket = socket,
+                isDebug = debug,
+                input = socket.openReadChannel(),
+                output = socket.openWriteChannel(autoFlush = true),
+                selectorManager = selectorManager,
+            )
+        } catch (e: Throwable) {
+            selectorManager.close()
+            throw e
+        }
+        // Not in the pool yet, so nothing else would ever close it.
+        try {
+            instance.login(username, password)
+        } catch (e: Throwable) {
+            instance.close()
+            throw e
+        }
+        instance
     },
     name = "ImapClient/$username@$host:$port"
 ) {
@@ -81,7 +99,9 @@ data class SocketInstance(
     val input: ByteReadChannel,
     val output: ByteWriteChannel,
     val isDebug: Boolean,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
+    /** The selector [socket] was opened on, if it belongs to this instance alone. */
+    private val selectorManager: SelectorManager? = null,
 ) : AutoCloseable {
 
     private val id = System.currentTimeMillis()
@@ -284,6 +304,7 @@ data class SocketInstance(
         runBlocking {
             this@SocketInstance.coroutineScope.cancel()
             this@SocketInstance.socket.close()
+            this@SocketInstance.selectorManager?.close()
         }
     }
 
