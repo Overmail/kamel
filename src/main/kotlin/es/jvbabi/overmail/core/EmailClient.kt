@@ -13,13 +13,13 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.sync.Mutex
 import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.io.encoding.Base64
 
 class ImapClient(
     val host: String,
     val port: Int,
     val ssl: Boolean = true,
-    val username: String,
-    val password: String,
+    val auth: Auth,
     val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
     val debug: Boolean = false,
     maxConnections: Int = 500
@@ -51,16 +51,37 @@ class ImapClient(
         }
         // Not in the pool yet, so nothing else would ever close it.
         try {
-            instance.login(username, password)
+            instance.login(auth)
         } catch (e: Throwable) {
             instance.close()
             throw e
         }
         instance
     },
-    name = "ImapClient/$username@$host:$port"
+    name = "ImapClient/${auth.username}@$host:$port"
 ) {
     private val logger = LoggerFactory.getLogger(this::class.java)
+
+    /**
+     * How the client logs in on every connection it opens.
+     */
+    sealed class Auth {
+        abstract val username: String
+
+        /** `LOGIN` with a username and a password. */
+        data class BasicAuth(override val username: String, val password: String) : Auth() {
+            // Keeps the password out of logs and exception messages.
+            override fun toString() = "BasicAuth(username=$username, password=***)"
+        }
+
+        /**
+         * `AUTHENTICATE XOAUTH2` with an OAuth 2.0 access token, as Gmail and Outlook expect it.
+         * [bearer] is the bare access token, without the `Bearer ` prefix.
+         */
+        data class BearerAuth(override val username: String, val bearer: String) : Auth() {
+            override fun toString() = "BearerAuth(username=$username, bearer=***)"
+        }
+    }
 
     suspend fun testConnection() {
         this.getClient()
@@ -293,8 +314,36 @@ data class SocketInstance(
         }
     }
 
-    internal suspend fun login(username: String, password: String) {
+    internal suspend fun loginUsernamePassword(username: String, password: String) {
         execute("LOGIN \"$username\" \"$password\"").await()
+    }
+
+    internal suspend fun login(auth: ImapClient.Auth) {
+        when (auth) {
+            is ImapClient.Auth.BasicAuth -> loginUsernamePassword(auth.username, auth.password)
+            is ImapClient.Auth.BearerAuth -> loginOauth(auth.username, auth.bearer)
+        }
+    }
+
+    /**
+     * Logs in with SASL XOAUTH2.
+     *
+     * The credentials are sent as the answer to the first continuation instead of as an initial
+     * response, which would need SASL-IR. A rejected token is answered with a second continuation
+     * carrying the error; the server only sends its tagged `NO` once that one got an empty answer,
+     * so without it the login would wait forever.
+     *
+     * @see <a href="https://developers.google.com/workspace/gmail/imap/xoauth2-protocol">XOAUTH2</a>
+     */
+    internal suspend fun loginOauth(email: String, bearer: String) {
+        val credentials = Base64.encode("user=$email\u0001auth=Bearer $bearer\u0001\u0001".toByteArray(Charsets.UTF_8))
+        val response = execute("AUTHENTICATE XOAUTH2")
+        var credentialsSent = false
+        response.response.consumeEach { line ->
+            if (!line.startsWith("+")) return@consumeEach
+            this.output.writeStringUtf8(if (credentialsSent) "\r\n" else "$credentials\r\n")
+            credentialsSent = true
+        }
     }
 
     override fun close() {

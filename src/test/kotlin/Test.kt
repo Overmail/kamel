@@ -10,8 +10,10 @@ fun main() {
                 port = 993,
                 ssl = true,
                 debug = true,
-                username = System.getenv("IMAP_USERNAME").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
-                password = System.getenv("IMAP_PASSWORD").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
+                auth = ImapClient.Auth.BasicAuth(
+                    username = System.getenv("IMAP_USERNAME").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_USERNAME") },
+                    password = System.getenv("IMAP_PASSWORD").orEmpty().ifBlank { throw MissingEnvVarException("IMAP_PASSWORD") },
+                ),
                 coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
             ).use { client ->
                 client.testConnection()
