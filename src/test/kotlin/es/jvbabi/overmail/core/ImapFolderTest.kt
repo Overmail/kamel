@@ -51,8 +51,7 @@ class ImapFolderTest : FunSpec({
                     host = "127.0.0.1",
                     port = (running.localAddress as InetSocketAddress).port,
                     ssl = false,
-                    username = "user",
-                    password = "password",
+                    auth = ImapClient.Auth.BasicAuth("user", "password"),
                     coroutineScope = scope
                 )
                 val folder = ImapFolder(client, listOf("INBOX"), "/", null)
@@ -107,8 +106,7 @@ class ImapFolderTest : FunSpec({
                             host = "127.0.0.1",
                             port = (running.localAddress as InetSocketAddress).port,
                             ssl = false,
-                            username = "user",
-                            password = "password",
+                            auth = ImapClient.Auth.BasicAuth("user", "password"),
                             coroutineScope = scope
                         )
                     )

@@ -36,8 +36,7 @@ class EmailClientTest : FunSpec({
                     host = "127.0.0.1",
                     port = (running.localAddress as InetSocketAddress).port,
                     ssl = false,
-                    username = "user",
-                    password = "password",
+                    auth = ImapClient.Auth.BasicAuth("user", "password"),
                     coroutineScope = scope,
                 )
 
@@ -77,8 +76,7 @@ class EmailClientTest : FunSpec({
                         host = "127.0.0.1",
                         port = (running.localAddress as InetSocketAddress).port,
                         ssl = false,
-                        username = "user",
-                        password = "password",
+                        auth = ImapClient.Auth.BasicAuth("user", "password"),
                         coroutineScope = scope,
                     ).use { client ->
                         client.getFolders().single().use { it.getMailIds() }

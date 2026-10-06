@@ -53,8 +53,10 @@ fun main() = runBlocking {
         host = "imap.example.com",
         port = 993,
         ssl = true,
-        username = System.getenv("IMAP_USERNAME"),
-        password = System.getenv("IMAP_PASSWORD"),
+        auth = ImapClient.Auth.BasicAuth(
+            username = System.getenv("IMAP_USERNAME"),
+            password = System.getenv("IMAP_PASSWORD"),
+        ),
     ).use { client ->
         val inbox = client.getFolders().first { it.fullName == "INBOX" }
 
@@ -76,6 +78,26 @@ fun main() = runBlocking {
 
 Message fields are `Deferred` — only what you request in `getMails { }` is fetched, so `await()`
 returns immediately for those fields.
+
+### Logging in with OAuth 2.0
+
+For providers that require OAuth (Gmail, Outlook/Microsoft 365), pass an access token instead of a
+password. The client logs in with SASL `XOAUTH2`:
+
+```kotlin
+ImapClient(
+    host = "imap.gmail.com",
+    port = 993,
+    auth = ImapClient.Auth.BearerAuth(
+        username = "someone@gmail.com",
+        bearer = accessToken, // the bare token, without "Bearer "
+    ),
+)
+```
+
+Obtaining and refreshing the token is up to you. The token is used whenever the client opens a new
+connection, so build a new client once it has expired. A rejected token makes the call that opened
+the connection throw an `ImapCommandException`.
 
 ### Reading the message body
 

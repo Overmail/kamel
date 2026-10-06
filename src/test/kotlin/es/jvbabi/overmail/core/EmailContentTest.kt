@@ -22,8 +22,7 @@ private fun emailOn(server: ServerSocket, scope: CoroutineScope): Email {
         host = "127.0.0.1",
         port = (server.localAddress as InetSocketAddress).port,
         ssl = false,
-        username = "user",
-        password = "password",
+        auth = ImapClient.Auth.BasicAuth("user", "password"),
         coroutineScope = scope
     )
     return Email(folder = ImapFolder(client, listOf("INBOX"), "/", null))
