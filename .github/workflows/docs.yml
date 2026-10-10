@@ -1,0 +1,124 @@
+name: Docs
+on:
+  # Released docs only: the site is deployed for the same tags the package is published for.
+  push:
+    tags:
+      - 'v*.*.*'
+  # Pull requests build the docs to catch broken topics, but never deploy.
+  pull_request:
+    paths:
+      - 'Writerside/**'
+      - 'src/main/**'
+      - 'build.gradle.kts'
+      - 'gradle/**'
+      - '.github/workflows/docs.yml'
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  INSTANCE: Writerside/kamel
+  ARTIFACT: webHelpKAMEL2-all.zip
+  DOCKER_VERSION: '2026.09.0357'
+
+jobs:
+  writerside:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        name: Checkout repository
+
+      - name: Set the released version
+        if: github.ref_type == 'tag'
+        run: sed -i "s|<var name=\"version\" value=\"[^\"]*\"/>|<var name=\"version\" value=\"${GITHUB_REF_NAME#v}\"/>|" Writerside/v.list
+
+      - uses: JetBrains/writerside-github-action@v4
+        name: Build Writerside docs
+        with:
+          instance: ${{ env.INSTANCE }}
+          artifact: ${{ env.ARTIFACT }}
+          docker-version: ${{ env.DOCKER_VERSION }}
+
+      - uses: JetBrains/writerside-checker-action@v1
+        name: Check Writerside build report
+        with:
+          instance: ${{ env.INSTANCE }}
+
+      - uses: actions/upload-artifact@v7
+        name: Upload Writerside artifact
+        with:
+          name: writerside
+          path: artifacts/${{ env.ARTIFACT }}
+          retention-days: 7
+
+  dokka:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        name: Checkout repository
+      - uses: actions/setup-java@v5
+        name: Setup Java
+        with:
+          java-version: '26'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Generate Dokka docs
+        run: ./gradlew dokkaGenerateHtml
+        env:
+          # Empty on pull requests, where the build falls back to "unspecified".
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+      - uses: actions/upload-artifact@v7
+        name: Upload Dokka artifact
+        with:
+          name: dokka
+          path: build/dokka/html
+          retention-days: 7
+
+  deploy:
+    if: github.ref_type == 'tag'
+    needs: [writerside, dokka]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        name: Download Writerside artifact
+        with:
+          name: writerside
+
+      - uses: actions/download-artifact@v8
+        name: Download Dokka artifact
+        with:
+          name: dokka
+          path: dokka
+
+      - name: Assemble site
+        run: |
+          mkdir -p site
+          unzip -q -O UTF-8 "$ARTIFACT" -d site
+          mkdir -p site/api
+          cp -r dokka/. site/api/
+
+      - uses: actions/configure-pages@v6
+        name: Configure GitHub Pages
+
+      - uses: actions/upload-pages-artifact@v5
+        name: Upload Pages artifact
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v5
+        name: Deploy to GitHub Pages
+        id: deployment

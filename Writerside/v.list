@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE vars SYSTEM "https://resources.jetbrains.com/writerside/1.0/vars.dtd">
+<vars>
+    <var name="product" value="Kamel"/>
+    <!-- Replaced with the released version by .github/workflows/docs.yml -->
+    <var name="version" value="0.7.0"/>
+</vars>

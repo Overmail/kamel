@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.maven.publish)
     alias(libs.plugins.kotest)
+    alias(libs.plugins.dokka)
 }
 
 group = "es.jvbabi.overmail"
@@ -43,6 +44,18 @@ kotlin {
         freeCompilerArgs.add("-opt-in=kotlin.contracts.ExperimentalContracts")
 
         jvmTarget = JvmTarget.JVM_26
+    }
+}
+
+dokka {
+    moduleName = "Kamel"
+
+    dokkaSourceSets.main {
+        sourceLink {
+            localDirectory = file("src/main/kotlin")
+            remoteUrl("https://github.com/Overmail/kamel/tree/main/src/main/kotlin")
+            remoteLineSuffix = "#L"
+        }
     }
 }
 
