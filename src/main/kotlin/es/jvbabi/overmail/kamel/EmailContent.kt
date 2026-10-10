@@ -5,6 +5,7 @@ import jakarta.mail.internet.MimeMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -22,10 +23,16 @@ internal class EmailContent(
      * length, so neither the response lines around it nor a rewritten line ending can end up in
      * the message.
      */
-    fun getRawContent(): Flow<ByteArray> = channelFlow {
-        val uid = email.uid.await()
-        email.folder.getClient().executeWithLiterals("UID FETCH $uid BODY.PEEK[]") { chunk ->
-            send(chunk)
+    fun getRawContent(): Flow<ByteArray> {
+        // An email that was parsed from its source has nothing to fetch.
+        email.source?.let { return flowOf(it) }
+        val folder = checkNotNull(email.folder)
+
+        return channelFlow {
+            val uid = email.uid.await()
+            folder.getClient().executeWithLiterals("UID FETCH $uid BODY.PEEK[]") { chunk ->
+                send(chunk)
+            }
         }
     }
 

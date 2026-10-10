@@ -2,7 +2,7 @@
 
 The body of a message is downloaded separately from its [fields](message-fields.md), and only when you ask for it.
 
-Both functions on this page need the UID of the message, so fetch it with `uid = true`:
+`getContent()` and `getRawContent()` need the UID of the message, so fetch it with `uid = true`:
 
 ```kotlin
 val mail = inbox.getMails {
@@ -95,7 +95,38 @@ File("mail.eml").outputStream().use { output ->
 
 Use it for large messages, or when you want to parse the source with a library of your own.
 
+## Creating an email from its source {id="parse"}
+
+`Email.parse()` turns a message source back into an `Email`, for example a stored `.eml` file or the bytes
+`getRawContent()` returned earlier. It needs no connection:
+
+```kotlin
+val mail = File("mail.eml").inputStream().use { Email.parse(it) }
+
+println(mail.subject.await())
+println(mail.getContent(includeAttachments = true).attachments.size)
+```
+
+It accepts three kinds of source:
+
+| Source | Notes |
+|--------|-------|
+| `ByteArray` | The complete message source |
+| `InputStream` | Read to its end. The read blocks, and the stream is not closed |
+| `Flow<ByteArray>` | Collected first, so this overload suspends. Fits `getRawContent()` |
+
+The envelope fields are read from the headers, the same way a server fills them: `senders` and `replyTo` fall
+back to `from` if the message has no `Sender` or `Reply-To` header. `getContent()` and `getRawContent()` work on
+the source you passed in.
+
+> A message source has no UID and no flags. `uid.await()` and `flags.await()` throw an `IllegalStateException`
+> for a parsed email, and so does `sentAt.await()` if the message has no readable `Date` header. Check
+> `uidValue`, `flagsValue` and `sentAtValue` if you are not sure, see [](message-fields.md#values).
+{style="warning"}
+
+`Email.parse()` throws an `IllegalArgumentException` if the source cannot be read as a message.
+
 ## Errors
 
-Both functions throw an `ImapCommandException` if the server refuses the download, and an
+`getContent()` and `getRawContent()` throw an `ImapCommandException` if the server refuses the download, and an
 `ImapConnectionClosedException` if the connection breaks in the middle. See [](error-handling.md).

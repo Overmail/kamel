@@ -31,6 +31,19 @@ internal data class ParsedEnvelope(
 )
 
 /**
+ * Stands in for the `Message-ID` of a message that has none, built from the fields that identify it.
+ */
+internal fun generatedMessageId(sentAt: Instant?, subject: String?, inReplyTo: String?, from: Set<EmailUser>): String {
+    val fingerprint = buildString {
+        append(sentAt?.toEpochMilliseconds())
+        append(subject)
+        append(inReplyTo)
+        append(from.map { it.address }.sorted().distinct().joinToString(""))
+    }
+    return "overmail-generated-id:" + fingerprint.sha1()
+}
+
+/**
  * A single untagged `FETCH` response. Items that were not part of the response are `null`.
  */
 internal data class ParsedFetchItem(
@@ -218,13 +231,7 @@ internal class FetchResponseParser(
             remaining = remaining
                 .substringAfter("NIL")
                 .trimStart()
-            val fingerprint = buildString {
-                append(sentAt.toEpochMilliseconds())
-                append(subject)
-                append(inReplyTo)
-                append(from.map { it.address }.sorted().distinct().joinToString(""))
-            }
-            "overmail-generated-id:" + fingerprint.sha1()
+            generatedMessageId(sentAt, subject, inReplyTo, from)
         } else {
             val messageIdRaw = SIMPLE_QUOTE_REGEX.find(remaining)?.value!!
             remaining = remaining.removePrefix(messageIdRaw)
