@@ -101,8 +101,8 @@ The idle connection is closed together with the client at the end of `use`.
 ## The whole program
 
 ```kotlin
-import es.jvbabi.overmail.core.ImapClient
-import es.jvbabi.overmail.core.ImapFolder
+import es.jvbabi.overmail.kamel.ImapClient
+import es.jvbabi.overmail.kamel.ImapFolder
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

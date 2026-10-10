@@ -18,8 +18,8 @@ You will use `ImapClient`, `getFolders()`, `getMailIds()` and `getMails { }`.
 Create the client inside `runBlocking` and close it with `use`:
 
 ```kotlin
-import es.jvbabi.overmail.core.ImapClient
-import es.jvbabi.overmail.core.ImapFolder
+import es.jvbabi.overmail.kamel.ImapClient
+import es.jvbabi.overmail.kamel.ImapFolder
 import kotlinx.coroutines.runBlocking
 
 fun main() = runBlocking {
@@ -126,7 +126,7 @@ mails.reversed().forEach { mail ->
 }
 ```
 
-Add `import es.jvbabi.overmail.core.Email` for the flag.
+Add `import es.jvbabi.overmail.kamel.Email` for the flag.
 
 ```text
 * 2026-10-09T08:12:44Z  Billing  Your invoice for October

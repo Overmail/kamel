@@ -12,8 +12,8 @@ environment variables `IMAP_USERNAME` and `IMAP_PASSWORD`.
 `use` closes all of them at the end.
 
 ```kotlin
-import es.jvbabi.overmail.core.ImapClient
-import es.jvbabi.overmail.core.ImapFolder
+import es.jvbabi.overmail.kamel.ImapClient
+import es.jvbabi.overmail.kamel.ImapFolder
 import kotlinx.coroutines.runBlocking
 
 fun main() = runBlocking {

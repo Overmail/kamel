@@ -17,7 +17,7 @@ These loggers exist:
 |-------------|------|
 | `ImapClient/<username>@<host>:<port>` | Opening and closing of client connections |
 | `ImapFolder/<full name>` | Opening and closing of folder connections, responses that could not be parsed |
-| `es.jvbabi.overmail.core.ImapClient` | Folder list entries that could not be parsed |
+| `es.jvbabi.overmail.kamel.ImapClient` | Folder list entries that could not be parsed |
 
 Connection handling is logged on `DEBUG`, problems on `WARN` and `ERROR`. A `logback.xml` that shows everything
 from Kamel's connection pools:

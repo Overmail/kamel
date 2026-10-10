@@ -1,6 +1,6 @@
 # Utilities
 
-The package `es.jvbabi.overmail.util` contains helpers Kamel uses itself. They are public, so you can use them
+The package `es.jvbabi.overmail.kamel.util` contains helpers Kamel uses itself. They are public, so you can use them
 when you work with mail data that did not come through Kamel.
 
 ## MimeUtility {id="mime-utility"}
