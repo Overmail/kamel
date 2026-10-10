@@ -40,6 +40,24 @@ Maven:
 </dependency>
 ```
 
+### Snapshots
+
+Every commit on `main` is published as a snapshot. The version is the next minor version with `-SNAPSHOT`, e.g.
+`0.8.0-SNAPSHOT` after the release `0.7.0`:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
+        mavenContent { snapshotsOnly() }
+    }
+}
+
+dependencies {
+    implementation("es.jvbabi.overmail:kamel:0.8.0-SNAPSHOT")
+}
+```
+
 ## Getting started
 
 Connect, pick a folder, fetch messages:

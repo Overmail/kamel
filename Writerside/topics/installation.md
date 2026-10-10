@@ -65,6 +65,29 @@ dependencies {
 > [GitHub tags](https://github.com/Overmail/kamel/tags) for the latest version.
 {style="tip"}
 
+## Snapshots {id="snapshots"}
+
+Every commit on `main` is published as a snapshot, so you can try changes before they are released. The snapshot
+version is the next minor version with `-SNAPSHOT`: after the release `0.7.0` it is `0.8.0-SNAPSHOT`.
+
+Snapshots are not on Maven Central itself. Add the snapshot repository:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://central.sonatype.com/repository/maven-snapshots/") {
+        mavenContent { snapshotsOnly() }
+    }
+}
+
+dependencies {
+    implementation("es.jvbabi.overmail:kamel:0.8.0-SNAPSHOT")
+}
+```
+
+> A snapshot can change at any time and is removed after 90 days. Use a release for anything you ship.
+{style="warning"}
+
 ## Coroutines {id="coroutines"}
 
 Kamel's API is made of `suspend` functions, `Deferred` values and a `Flow`. Your code needs the coroutines library
