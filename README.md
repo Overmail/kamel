@@ -42,8 +42,8 @@ Maven:
 
 ### Snapshots
 
-Every commit on `main` is published as a snapshot. The version is the next minor version with `-SNAPSHOT`, e.g.
-`0.8.0-SNAPSHOT` after the release `0.7.0`:
+Kamel is currently published as snapshots only. Every tag that ends in `-SNAPSHOT` publishes a snapshot, e.g. the
+tag `v0.9.0-SNAPSHOT` publishes `0.9.0-SNAPSHOT`. Snapshots need the snapshot repository:
 
 ```kotlin
 repositories {
@@ -54,7 +54,7 @@ repositories {
 }
 
 dependencies {
-    implementation("es.jvbabi.overmail:kamel:0.8.0-SNAPSHOT")
+    implementation("es.jvbabi.overmail:kamel:0.9.0-SNAPSHOT")
 }
 ```
 

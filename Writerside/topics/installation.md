@@ -67,8 +67,8 @@ dependencies {
 
 ## Snapshots {id="snapshots"}
 
-Every commit on `main` is published as a snapshot, so you can try changes before they are released. The snapshot
-version is the next minor version with `-SNAPSHOT`: after the release `0.7.0` it is `0.8.0-SNAPSHOT`.
+Kamel is currently published as snapshots only. A snapshot is published for every tag that ends in `-SNAPSHOT`:
+the tag `v0.9.0-SNAPSHOT` publishes the version `0.9.0-SNAPSHOT`. The releases up to `0.8.0` stay on Maven Central.
 
 Snapshots are not on Maven Central itself. Add the snapshot repository:
 
@@ -81,11 +81,11 @@ repositories {
 }
 
 dependencies {
-    implementation("es.jvbabi.overmail:kamel:0.8.0-SNAPSHOT")
+    implementation("es.jvbabi.overmail:kamel:0.9.0-SNAPSHOT")
 }
 ```
 
-> A snapshot can change at any time and is removed after 90 days. Use a release for anything you ship.
+> A snapshot can change at any time and is removed after 90 days.
 {style="warning"}
 
 ## Coroutines {id="coroutines"}
