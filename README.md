@@ -45,7 +45,7 @@ Maven:
 Connect, pick a folder, fetch messages:
 
 ```kotlin
-import es.jvbabi.overmail.core.ImapClient
+import es.jvbabi.overmail.kamel.ImapClient
 import kotlinx.coroutines.runBlocking
 
 fun main() = runBlocking {
