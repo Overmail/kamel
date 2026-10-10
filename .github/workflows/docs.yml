@@ -1,6 +1,6 @@
 name: Docs
 on:
-  # Released docs only: the site is deployed for the same tags the package is published for.
+  # Released docs only: the site is deployed for version tags, not for every push to main.
   push:
     tags:
       - 'v*.*.*'
