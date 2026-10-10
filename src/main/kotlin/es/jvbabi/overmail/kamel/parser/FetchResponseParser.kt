@@ -53,6 +53,19 @@ internal data class ParsedFetchItem(
 )
 
 /**
+ * Finds the UID in a `FETCH` response the parser gave up on. Only looks where an item sits outside
+ * of the envelope, the first and the last one, so a subject cannot be taken for it.
+ *
+ * @param response the items of the response, see `SocketInstance.Response.next`
+ */
+internal fun fetchResponseUid(response: List<String>): Long? =
+    (LEADING_UID_REGEX.find(response.first()) ?: TRAILING_UID_REGEX.find(response.last()))
+        ?.groupValues?.get(1)?.toLongOrNull()
+
+private val LEADING_UID_REGEX = Regex("""^\* \d+ FETCH \((?:FLAGS \([^)]*\) )?UID (\d+)""", RegexOption.IGNORE_CASE)
+private val TRAILING_UID_REGEX = Regex("""[)\s]UID (\d+)\)\s*$""", RegexOption.IGNORE_CASE)
+
+/**
  * Parses a single untagged `FETCH` response, e.g.
  * `* 1 FETCH (FLAGS (\Seen) UID 42 ENVELOPE (...))`.
  *

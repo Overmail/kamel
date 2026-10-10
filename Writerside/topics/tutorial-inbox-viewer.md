@@ -3,7 +3,7 @@
 In this tutorial you build a small command line program that lists the folders of a mailbox and prints the ten
 newest messages of the inbox.
 
-You will use `ImapClient`, `getFolders()`, `getMailIds()` and `getMails { }`.
+You will use `ImapClient`, `getFolders()`, `state()` and `getMails { }`.
 
 ## Before you start
 
@@ -86,24 +86,29 @@ val inbox = folders.first { it.specialType == ImapFolder.SpecialType.INBOX }
 <procedure title="Fetch the last ten messages" id="newest-messages">
 <step>
 
-`getMailIds()` returns the sequence numbers of all messages in the folder, oldest first. Take the last ten:
+`state()` tells how many messages the folder holds. Their sequence numbers run from 1 for the oldest to that
+number for the newest, so the last ten start here:
 
 ```kotlin
-val newestIds = inbox.getMailIds().takeLast(10)
-println("${inbox.fullName}: showing ${newestIds.size} newest messages")
+val count = inbox.state().exists
+val first = maxOf(1, count - 9)
+println("${inbox.fullName}: showing the newest of $count messages")
 ```
 
 </step>
 <step>
 
-Fetch that range. `all()` requests envelope, flags and UID in one go:
+Fetch from there to the end, unless the folder is empty. `all()` requests envelope, flags and UID in one go.
+`getMails` returns a `Flow`; `toList()` collects it:
 
 ```kotlin
-val mails = inbox.getMails {
-    getIds(newestIds.map { it.toLong() })
+val mails = if (count == 0) emptyList() else inbox.getMails {
+    idRange(first.toLong())
     all()
-}
+}.toList()
 ```
+
+Add `import kotlinx.coroutines.flow.toList`.
 
 </step>
 <step>

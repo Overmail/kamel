@@ -30,7 +30,7 @@ ImapClient(
         getAll()
         envelope = true
         uid = true
-    }.forEach { mail ->
+    }.collect { mail ->
         println("${mail.uid.await()}: ${mail.subject.await()}")
     }
 }
@@ -40,7 +40,8 @@ ImapClient(
 
 - **Login** with username and password, or with an OAuth 2.0 access token (SASL `XOAUTH2`) for Gmail and Outlook.
 - **Folders**: list every folder of an account, including its special use (inbox, sent, drafts, spam, trash).
-- **Messages**: fetch envelopes, flags and UIDs for a single message, a range or a whole folder.
+- **Messages**: fetch envelopes, flags and UIDs for a single message, a range or a whole folder, by sequence
+  number or by UID, as a `Flow`.
 - **Bodies**: plain text, HTML and attachments, already decoded. Or the raw message source as a stream.
 - **IDLE**: get notified about new, removed and changed messages without polling.
 - **Connection pooling**: commands run in parallel on several connections, opened on demand.

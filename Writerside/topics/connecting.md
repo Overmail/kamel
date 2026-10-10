@@ -24,8 +24,14 @@ port `143`. `STARTTLS` is not supported, see [](known-limitations.md).
 : How to log in, see [](authentication.md).
 
 `coroutineScope` (default: `CoroutineScope(Dispatchers.IO)`)
-: Scope the sockets and the `Deferred` [message fields](message-fields.md) run in. Pass your own to control the
-dispatcher or to use a `SupervisorJob`.
+: Scope for what a connection needs while it is open: its selector and the TLS layer. Commands do not run here.
+They run in the coroutine that calls them, so cancelling that coroutine cancels the command.
+
+`readTimeout` (default: `60.seconds`)
+: How long the server may stay silent while a response is being read. After that the connection is closed and
+the command throws an [`ImapConnectionClosedException`](error-handling.md#closed). It limits the silence between
+two reads, not the duration of a command, so a large download is not cut off. `Duration.INFINITE` waits forever.
+It does not apply while [idling](idle.md).
 
 `debug` (default: `false`)
 : Prints the IMAP conversation to standard output, see [](logging-and-debugging.md#debug).
@@ -34,6 +40,8 @@ dispatcher or to use a `SupervisorJob`.
 : Upper limit of open connections for this client, see [](connection-pooling.md).
 
 All of them except `maxConnections` are readable as properties, for example `client.host`.
+
+`ImapClient` implements `MailClient`, see [](testing.md).
 
 ## Connections are opened on demand
 

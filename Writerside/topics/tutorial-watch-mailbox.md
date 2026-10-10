@@ -3,7 +3,7 @@
 In this tutorial you build a program that prints the subject of every message the moment it arrives, without
 polling.
 
-You will use `getIdleFolder()` and `idle { }`.
+You will use `getIdleFolder()` and `idle { }`. For the same as a `Flow`, see [](idle.md#events).
 
 ## Before you start
 
@@ -59,7 +59,7 @@ val printer = launch {
         inbox.getMails {
             getId(sequenceNumber)
             all()
-        }.forEach { mail ->
+        }.collect { mail ->
             println("New mail from ${mail.from.await().joinToString()}: ${mail.subject.await()}")
         }
     }
@@ -83,7 +83,8 @@ New mail from Ada Lovelace <ada@example.com>: Lunch?
 <procedure title="Shut down cleanly" id="stop">
 <step>
 
-Cancel the coroutine that runs `idle { }`. Then close the channel so the printer finishes:
+Cancel the coroutine that runs `idle { }`, which ends the `IDLE` on the server. Then close the channel so the
+printer finishes:
 
 ```kotlin
 delay(10.minutes)
@@ -134,7 +135,7 @@ fun main() = runBlocking {
                 inbox.getMails {
                     getId(sequenceNumber)
                     all()
-                }.forEach { mail ->
+                }.collect { mail ->
                     println("New mail from ${mail.from.await().joinToString()}: ${mail.subject.await()}")
                 }
             }

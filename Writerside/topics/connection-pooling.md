@@ -6,14 +6,20 @@ connections and opens new ones on demand. You do not have to manage them, but it
 ## Two levels
 
 Client pool
-: Connections that are logged in but have no folder selected. Used for `getFolders()` and `testConnection()`. Its
+: Connections that are logged in but have no folder selected. Used for `getFolders()`, `testConnection()` and the
+[`status()`](folders.md#state) of a folder. Its
 size is limited by `maxConnections` of [`ImapClient`](connecting.md), `500` by default.
 
 Folder pool
 : Every `ImapFolder` has its own pool of up to **five** connections. Each of them has that folder selected. Used
-for `getMailIds()`, `getIdByUid()`, `getMails { }` and message content.
+for `state()`, `getMailIds()`, `getIdByUid()`, `getMails { }` and message content.
 
 An [`IdleFolder`](idle.md) takes one more connection of its folder and keeps it for itself.
+
+A `getMails { }` flow holds its connection for as long as it is collected. Downloading the content of a mail
+inside `collect { }` therefore runs on a second connection of the folder. Such a command never waits for a busy
+connection: if the pool is full, it gets one beyond the limit, because the fetch it comes from cannot go on
+before it is done.
 
 Folder connections are opened through the client, so they count towards `maxConnections` as well.
 
@@ -21,10 +27,12 @@ Folder connections are opened through the client, so they count towards `maxConn
 
 For every command, the pool:
 
-1. drops connections that are no longer alive,
+1. drops connections that are no longer alive, which includes those a cancelled or timed out command left in the
+   middle of a response,
 2. hands out a connection that is currently free, if there is one,
 3. otherwise opens a new one, if the pool is not full,
-4. otherwise picks one of the busy connections, and the command waits for its turn.
+4. otherwise picks one of the busy connections, and the command waits for its turn. A command issued from inside
+   the collector of a fetch opens a connection instead, see above.
 
 Opening a connection means connecting, logging in and, for a folder, selecting it. A command that needs a new
 connection therefore takes a little longer than one that reuses an idle one.

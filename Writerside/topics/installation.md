@@ -88,6 +88,19 @@ dependencies {
 > A snapshot can change at any time and is removed after 90 days.
 {style="warning"}
 
+## Test support {id="test"}
+
+The artifact `es.jvbabi.overmail:kamel-test` contains mailboxes that live in memory, for testing your own code
+without a server. It has the same version as Kamel and is published the same way:
+
+```kotlin
+dependencies {
+    testImplementation("es.jvbabi.overmail:kamel-test:%version%")
+}
+```
+
+See [](testing.md).
+
 ## Coroutines {id="coroutines"}
 
 Kamel's API is made of `suspend` functions, `Deferred` values and a `Flow`. Your code needs the coroutines library

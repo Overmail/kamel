@@ -1,6 +1,7 @@
 package es.jvbabi.overmail.kamel.parser
 
 import es.jvbabi.overmail.kamel.Email
+import es.jvbabi.overmail.kamel.IdleEvent
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 

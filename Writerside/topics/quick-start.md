@@ -45,7 +45,7 @@ val inbox = client.getFolders().first { it.specialType == ImapFolder.SpecialType
 <step>
 
 **Fetch messages.** Say which messages you want and which fields you need. Only those fields are requested from
-the server:
+the server. The result is a `Flow`: nothing is sent yet.
 
 ```kotlin
 val mails = inbox.getMails {
@@ -59,10 +59,11 @@ val mails = inbox.getMails {
 </step>
 <step>
 
-**Read the fields.** Every field is a `Deferred`. For fields you requested, `await()` returns immediately:
+**Read the fields.** Collecting the flow runs the fetch and hands you one message after the other. Every field is
+a `Deferred`. For fields you requested, `await()` returns immediately:
 
 ```kotlin
-mails.forEach { mail ->
+mails.collect { mail ->
     println("${mail.uid.await()}: ${mail.subject.await()}")
     println("  from:  ${mail.from.await().joinToString()}")
     println("  flags: ${mail.flags.await().joinToString { it.value }}")

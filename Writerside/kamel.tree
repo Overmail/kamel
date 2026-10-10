@@ -30,6 +30,7 @@
         <toc-element topic="connection-pooling.md"/>
         <toc-element topic="error-handling.md"/>
         <toc-element topic="logging-and-debugging.md"/>
+        <toc-element topic="testing.md"/>
         <toc-element topic="utilities.md"/>
     </toc-element>
 

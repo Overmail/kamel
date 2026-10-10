@@ -107,6 +107,13 @@ println(mail.subject.await())
 println(mail.getContent(includeAttachments = true).attachments.size)
 ```
 
+A message source has no UID and no flags. Pass them if you know them, for example to build the mail a folder
+would hand out in a [test](testing.md):
+
+```kotlin
+val mail = Email.parse(source, uid = 4392, flags = setOf(Email.Flag.Seen))
+```
+
 It accepts three kinds of source:
 
 | Source | Notes |
@@ -119,8 +126,8 @@ The envelope fields are read from the headers, the same way a server fills them:
 back to `from` if the message has no `Sender` or `Reply-To` header. `getContent()` and `getRawContent()` work on
 the source you passed in.
 
-> A message source has no UID and no flags. `uid.await()` and `flags.await()` throw an `IllegalStateException`
-> for a parsed email, and so does `sentAt.await()` if the message has no readable `Date` header. Check
+> Without them, `uid.await()` and `flags.await()` throw an `IllegalStateException` for a parsed email, and so
+> does `sentAt.await()` if the message has no readable `Date` header. Check
 > `uidValue`, `flagsValue` and `sentAtValue` if you are not sure, see [](message-fields.md#values).
 {style="warning"}
 

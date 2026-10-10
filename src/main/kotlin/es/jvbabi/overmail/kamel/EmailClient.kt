@@ -2,27 +2,42 @@ package es.jvbabi.overmail.kamel
 
 import es.jvbabi.overmail.kamel.parser.FolderListParser
 import es.jvbabi.overmail.kamel.parser.ImapStatus
+import es.jvbabi.overmail.kamel.parser.SelectResponseParser
 import es.jvbabi.overmail.kamel.parser.TaggedResponseParser
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.tls.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class ImapClient(
     val host: String,
     val port: Int,
     val ssl: Boolean = true,
     val auth: Auth,
+    /**
+     * Runs what a connection needs for as long as it is open: its selector and, with [ssl], the
+     * TLS record layer. Commands do not run here, they run in the context of their caller.
+     */
     val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
     val debug: Boolean = false,
-    maxConnections: Int = 500
+    maxConnections: Int = 500,
+    /**
+     * How long the server may stay silent while a response is being read. After that the
+     * connection is closed and the command throws an [ImapConnectionClosedException].
+     * [Duration.INFINITE] waits forever.
+     */
+    val readTimeout: Duration = 60.seconds,
 ): ClosableClientPool(
     maxPoolSize = maxConnections,
     factory = {
@@ -44,6 +59,7 @@ class ImapClient(
                 input = socket.openReadChannel(),
                 output = socket.openWriteChannel(autoFlush = true),
                 selectorManager = selectorManager,
+                readTimeout = readTimeout,
             )
         } catch (e: Throwable) {
             selectorManager.close()
@@ -59,7 +75,7 @@ class ImapClient(
         instance
     },
     name = "ImapClient/${auth.username}@$host:$port"
-) {
+), MailClient {
     private val logger = LoggerFactory.getLogger(this::class.java)
 
     /**
@@ -87,42 +103,49 @@ class ImapClient(
         this.getClient()
     }
 
-    suspend fun getFolders(onlyRoot: Boolean = false): List<ImapFolder> {
+    override suspend fun getFolders(onlyRoot: Boolean): List<ImapFolder> {
         // Borrowed, not owned: closing it here left the instance in the pool, and the next command
         // got the dead socket handed back -- its LIST answered nothing, so the account looked like
         // it had no folders at all.
-        val socketInstance = this.getClient()
-        val response = socketInstance.execute(buildString {
+        val command = buildString {
             append("LIST \"\" \"")
             if (onlyRoot) append("\"")
             else append("*")
             append("\"")
-        })
-
-        val folders = mutableListOf<ImapFolder>()
-        response.response.consumeEach { line ->
-            if (TaggedResponseParser.parse(line, response.commandId) != null) return@consumeEach
-            val folder = FolderListParser.parse(line)
-            if (folder != null) {
-                folders.add(ImapFolder(this, folder.path, folder.delimiter, folder.specialType))
-                return@consumeEach
-            }
-            logger.warn("Failed to parse folder: $line")
         }
 
-        return folders
+        return this.getClient().execute(command) {
+            val folders = mutableListOf<ImapFolder>()
+            while (true) {
+                val line = next()?.first() ?: break
+                val folder = FolderListParser.parse(line)
+                if (folder != null) folders.add(ImapFolder(this@ImapClient, folder.path, folder.delimiter, folder.specialType))
+                else logger.warn("Failed to parse folder: $line")
+            }
+            folders
+        }
     }
 }
 
 typealias SocketInstanceFactory = suspend () -> SocketInstance
+
+/**
+ * One connection to the server.
+ *
+ * A command runs in the coroutine that sent it: there is no reader working in the background, so
+ * cancelling the caller cancels the read. A response that was not read to its end leaves bytes of
+ * it on the socket, which the next command would take for its own; unless they can be skipped
+ * right away, such a connection is closed, and the pool it came from replaces it.
+ */
 data class SocketInstance(
     val socket: Socket,
     val input: ByteReadChannel,
     val output: ByteWriteChannel,
     val isDebug: Boolean,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
     /** The selector [socket] was opened on, if it belongs to this instance alone. */
     private val selectorManager: SelectorManager? = null,
+    /** See [ImapClient.readTimeout]. */
+    private val readTimeout: Duration = Duration.INFINITE,
 ) : AutoCloseable {
 
     private val id = System.currentTimeMillis()
@@ -132,190 +155,290 @@ data class SocketInstance(
     @Volatile
     private var isClosed = false
 
+    /**
+     * What the server answered to the `SELECT` this connection was opened with, for as long as no
+     * other command ran on it: a caller asking for the state of the folder right after does not
+     * have to select it a second time.
+     */
+    @Volatile
+    internal var freshSelect: SelectResponseParser? = null
+
+    /** Whether the server greeting was read; it precedes the response to the first command. */
+    private var isGreeted = false
+
     /** Whether this instance can still carry a command, see [ClosableClientPool.getClient]. */
     internal val isAlive: Boolean get() = !isClosed && !input.isClosedForRead
 
-    suspend fun execute(command: String): CommandResponse {
-        commandMutex.lock()
-        val commandIdString: String
-        val message: String
+    /**
+     * Sends [command] and lets [block] read its response. Whatever [block] left unread is read
+     * and dropped, so the command is complete when this returns.
+     *
+     * @throws ImapCommandException if the server answered with `NO` or `BAD`
+     * @throws ImapConnectionClosedException if the connection ended or stayed silent for
+     * [readTimeout] before the tagged completion
+     */
+    internal suspend fun <T> execute(command: String, block: suspend Response.() -> T): T = commandMutex.withLock(owner()) {
+        val response = send(command)
         try {
-            // Before awaiting the greeting: a socket closed while waiting for one never gets it.
-            if (isClosed) throw ImapConnectionClosedException("The connection is closed, cannot run $command")
-            isReady.await()
-            val commandId = lastCommandId++
-            commandIdString = "A${commandId.toString().padStart(3, '0')}"
-            message = "$commandIdString $command"
-            this.output.writeStringUtf8("$message\r\n")
+            val result = response.block()
+            while (response.next() != null) { }
+            result
         } catch (e: Throwable) {
-            // Nothing reads for this command yet, so the reader job below cannot unlock for it.
-            commandMutex.unlock()
+            // Cancelled or failed somewhere in the middle of the response. If that was between two
+            // reads, as for a collector that has seen enough, the rest may be there already: a
+            // moment to skip it is cheaper than a new connection.
+            if (!response.isComplete && response.isAligned && !isClosed) withContext(NonCancellable) {
+                withTimeoutOrNull(SKIP_TIMEOUT) { runCatching { while (response.next() != null) { } } }
+            }
+            if (!response.isComplete) close()
             throw e
         }
-        if (isDebug) println("SI $id > " + message.trim())
-
-        val channel = Channel<String>(Channel.BUFFERED)
-        val isDone = CompletableDeferred<Unit>()
-
-        var isCancelled = false
-        var failure: Exception? = null
-
-        val job = coroutineScope.launch {
-            while (!isCancelled) {
-                val line = this@SocketInstance.input.readLine()
-                if (line == null) {
-                    // The response ended without its tagged completion: the connection is gone.
-                    // Ending the command as a success here is what made a dead socket look like an
-                    // empty answer to whatever was asked.
-                    // Unless we asked for it: a cancelled IDLE ends its response the same way.
-                    if (!isCancelled) failure = ImapConnectionClosedException("The connection closed while reading the response to $message")
-                    break
-                }
-                if (isDebug) println("SI $id < $line")
-                channel.send(line)
-                // NO and BAD terminate the command just like OK. Without them the loop keeps
-                // reading, commandMutex is never unlocked and every later command on this socket
-                // blocks forever.
-                when (TaggedResponseParser.parse(line, commandIdString)) {
-                    ImapStatus.OK -> break
-                    ImapStatus.NO, ImapStatus.BAD -> {
-                        failure = ImapCommandException(message, line)
-                        break
-                    }
-                    null -> Unit
-                }
-                // A literal is framed here, on the socket, and handed over as one item: {n} counts
-                // bytes, while readLine() has already decoded them, so splitting the literal off a
-                // line would cut it at the wrong place as soon as it carries non ASCII bytes.
-                val length = LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: continue
-                channel.send(readLiteral(length).toString(Charsets.UTF_8))
-            }
-        }.also {
-            it.invokeOnCompletion {
-                commandMutex.unlock()
-                val cause = failure
-                if (cause == null) isDone.complete(Unit) else isDone.completeExceptionally(cause)
-                channel.close(cause)
-            }
-        }
-
-        val cancel: suspend () -> Unit = {
-            isCancelled = true
-            job.cancel()
-            this.output.writeStringUtf8("DONE\r\n")
-            isDone.completeExceptionally(CancellationException("Command cancelled"))
-        }
-
-        val response = CommandResponse(
-            commandId = commandIdString,
-            response = channel,
-            done = isDone,
-            cancel = cancel
-        )
-
-        return response
     }
+
+    /** Sends [command] and waits for its tagged completion, see [execute]. */
+    internal suspend fun execute(command: String) = execute(command) { }
 
     /**
      * Executes [command] and hands the raw bytes of every literal (`{n}`) in its response to
      * [onLiteralChunk], chunk by chunk. Everything around the literals - the untagged response
      * lines, the closing paren, the tagged completion - is consumed and dropped.
      *
-     * [execute] cannot do this: it is line based, hands the response over as a `Channel<String>`
-     * and therefore neither knows where a literal ends nor keeps its bytes intact. Reading the
-     * literal here, over the byte count the server announced, keeps every other command on the
-     * line based path instead of rewriting it for the sake of `BODY[]`.
+     * [Response.next] cannot do this: it decodes a literal to text and holds it as a whole, which
+     * is fine for an envelope and wrong for `BODY[]`.
      *
      * @throws ImapCommandException if the server answered with `NO` or `BAD`
      */
-    internal suspend fun executeWithLiterals(command: String, onLiteralChunk: suspend (ByteArray) -> Unit) {
-        commandMutex.lock()
-        try {
-            isReady.await()
-            val commandId = lastCommandId++
-            val commandIdString = "A${commandId.toString().padStart(3, '0')}"
-            val message = "$commandIdString $command"
-            this.output.writeStringUtf8("$message\r\n")
-            if (isDebug) println("SI $id > $message")
-
+    internal suspend fun executeWithLiterals(command: String, onLiteralChunk: suspend (ByteArray) -> Unit) =
+        execute(command) {
             while (true) {
-                val line = this.input.readLine()
-                    ?: throw ImapConnectionClosedException("The connection closed while reading the response to $message")
-                if (isDebug) println("SI $id < $line")
-                when (TaggedResponseParser.parse(line, commandIdString)) {
-                    ImapStatus.OK -> return
-                    ImapStatus.NO, ImapStatus.BAD -> throw ImapCommandException(message, line)
-                    null -> Unit
-                }
-                val length = LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: continue
-                streamLiteral(length, onLiteralChunk)
+                val line = line() ?: break
+                val length = literalLength(line) ?: continue
+                streamLiteral(this, length, onLiteralChunk)
             }
-        } finally {
-            commandMutex.unlock()
         }
-    }
 
     /**
-     * Reads exactly [length] bytes - the size the server announced, in bytes, not in characters.
+     * Sends `IDLE` and hands every line the server reports to [onLine] until the caller is
+     * cancelled or [onLine] throws. Either way the idling is ended with `DONE` and its completion
+     * awaited, so the connection can carry the next command, the next `IDLE` included.
      *
-     * The literal is buffered as a whole; the commands going through [execute] carry envelopes and
-     * header fields, not message bodies. [executeWithLiterals] streams instead.
+     * [readTimeout] does not apply while idling: a quiet folder is what an `IDLE` waits on.
+     *
+     * @see <a href="https://www.rfc-editor.org/rfc/rfc2177">RFC 2177 - IMAP4 IDLE command</a>
      */
-    private suspend fun readLiteral(length: Int): ByteArray =
-        ByteArray(length).also { this.input.readFully(it, 0, length) }
+    internal suspend fun idle(onLine: suspend (String) -> Unit): Unit = commandMutex.withLock(owner()) {
+        val response = send("IDLE")
+        try {
+            var isIdling = false
+            while (true) {
+                val line = response.line(if (isIdling) Duration.INFINITE else readTimeout) ?: break
+                if (line.startsWith("+")) isIdling = true
+                else onLine(line)
+            }
+        } catch (e: Throwable) {
+            if (!response.isComplete && !isClosed) withContext(NonCancellable) {
+                try {
+                    write("DONE")
+                    // A line the cancellation interrupted may be lost, which does not matter here:
+                    // only the tagged completion is looked for.
+                    val timeout = if (readTimeout.isFinite()) readTimeout else DONE_TIMEOUT
+                    while (response.line(timeout) != null) { }
+                } catch (_: Exception) {
+                    close()
+                }
+            }
+            throw e
+        }
+    }
 
     /**
-     * Reads a literal of [length] bytes and passes it on in chunks.
+     * Writes [command] under a new tag. Has to be called with [commandMutex] held, and its
+     * [Response] read to the end before the mutex is released.
      */
-    private suspend fun streamLiteral(length: Int, onChunk: suspend (ByteArray) -> Unit) {
+    private suspend fun send(command: String): Response {
+        // Before awaiting the greeting: a socket closed while waiting for one never gets it.
+        if (isClosed) throw ImapConnectionClosedException("The connection is closed, cannot run $command")
+        freshSelect = null
+        try {
+            awaitGreeting()
+            val tag = "A${(lastCommandId++).toString().padStart(3, '0')}"
+            val message = "$tag $command"
+            write(message)
+            return Response(tag, message)
+        } catch (e: Throwable) {
+            // Cancelled or failed with the greeting half read or the command half written: the
+            // server may still answer a command nobody is going to read the response of.
+            close()
+            throw e
+        }
+    }
+
+    /**
+     * The coroutine a command runs in owns the connection for that long, which is how
+     * [isHeldBy] tells a command that is issued from inside another one.
+     */
+    private suspend fun owner(): Job? = currentCoroutineContext()[Job]
+
+    /**
+     * Whether [job] or one of its parents is in the middle of a command on this connection, for
+     * example as the collector of a fetch that is still being read.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal fun isHeldBy(job: Job?): Boolean = generateSequence(job) { it.parent }.any { commandMutex.holdsLock(it) }
+
+    private suspend fun awaitGreeting() {
+        if (isGreeted) return
+        while (true) {
+            val line = read(readTimeout, "waiting for the server greeting") { input.readLine() }
+                ?: throw closed("The connection closed before the server greeting")
+            if (isDebug) println("SI $id < $line")
+            if (line.startsWith("* OK")) break
+        }
+        isGreeted = true
+    }
+
+    private suspend fun write(line: String) {
+        try {
+            this.output.writeStringUtf8("$line\r\n")
+        } catch (e: IOException) {
+            throw closed("The connection closed while sending a command", e)
+        }
+        if (isDebug) println("SI $id > $line")
+    }
+
+    /**
+     * Runs one read on the socket under [timeout]. A read that fails or times out leaves the
+     * stream at an unknown position, so the connection is closed with it.
+     */
+    private suspend fun <T> read(timeout: Duration, activity: String, block: suspend () -> T): T {
+        try {
+            if (!timeout.isFinite()) return block()
+            // Boxed, since null is what a read at the end of the stream returns.
+            val result = withTimeoutOrNull(timeout) { ReadResult(block()) }
+                ?: throw closed("The server did not answer within $timeout while $activity")
+            return result.value
+        } catch (e: IOException) {
+            if (e is ImapConnectionClosedException) throw e
+            throw closed("The connection failed while $activity", e)
+        } catch (e: CancellationException) {
+            // A read on a socket that close() took away ends cancelled although nobody cancelled
+            // the caller, who would otherwise stop without an error.
+            currentCoroutineContext().ensureActive()
+            throw closed("The connection was closed while $activity", e)
+        }
+    }
+
+    private class ReadResult<T>(val value: T)
+
+    private fun closed(message: String, cause: Throwable? = null): ImapConnectionClosedException {
+        close()
+        return ImapConnectionClosedException(message, cause)
+    }
+
+    /**
+     * Reads a literal of [length] bytes - the size the server announced, in bytes, not in
+     * characters - and passes it on in chunks.
+     */
+    private suspend fun streamLiteral(response: Response, length: Int, onChunk: suspend (ByteArray) -> Unit) {
         var remaining = length
-        val buffer = ByteArray(LITERAL_CHUNK_SIZE)
+        response.isAligned = false
         while (remaining > 0) {
-            val size = minOf(remaining, buffer.size)
-            this.input.readFully(buffer, 0, size)
-            onChunk(buffer.copyOf(size))
-            remaining -= size
-        }
-    }
-
-    class CommandResponse(
-        val commandId: String,
-        val response: Channel<String>,
-        private val done: Deferred<Unit>,
-        val cancel: suspend () -> Unit
-    ) {
-        /**
-         * Waits for the tagged completion of the command and discards its response.
-         *
-         * @throws ImapCommandException if the server answered with `NO` or `BAD`
-         */
-        suspend fun await(): CommandResponse {
-            // Draining is part of awaiting: the reader job fills a bounded channel and only
-            // completes once every line was handed over, so an unread response longer than the
-            // buffer would block the job - and with it the socket - forever.
-            response.consumeEach { }
-            done.await()
-            return this
-        }
-    }
-
-    val isReady = CompletableDeferred<Unit>()
-
-    init {
-        this.coroutineScope.launch {
-            while (true) {
-                val line = this@SocketInstance.input.readLine() ?: run {
-                    isReady.completeExceptionally(ImapConnectionClosedException("The connection closed before the server greeting"))
-                    return@launch
+            val chunk = ByteArray(minOf(remaining, LITERAL_CHUNK_SIZE))
+            read(readTimeout, "reading the response to ${response.message}") {
+                try {
+                    this.input.readFully(chunk, 0, chunk.size)
+                } catch (e: IOException) {
+                    throw closed("The connection closed inside a literal of the response to ${response.message}: ${length - remaining} of $length bytes arrived", e)
                 }
-                if (!isReady.isCompleted && line.startsWith("* OK")) break
             }
-            isReady.complete(Unit)
+            onChunk(chunk)
+            remaining -= chunk.size
+        }
+        response.isAligned = true
+    }
+
+    /**
+     * The response to one command, read from the socket as it is asked for.
+     *
+     * @param message the command as it was sent, tag included
+     */
+    internal inner class Response(val tag: String, val message: String) {
+        /** Whether the tagged completion was read, after which the socket is free for the next command. */
+        var isComplete = false
+            private set
+
+        /**
+         * Whether the next byte on the socket starts a line. Not while a read is under way or was
+         * interrupted, and not inside a literal.
+         */
+        var isAligned = true
+
+        /**
+         * The next untagged response, or `null` once the command completed with `OK`.
+         *
+         * A response is one line, unless it carries literals: then it is the line up to the
+         * announced literal, the literal, the rest of the line, and so on, each as its own item.
+         * Framing it here keeps a response a parser gave up on from spilling into the next one.
+         *
+         * A literal is cut off the socket over its byte count: `{n}` counts bytes, while the line
+         * around it is decoded already, so splitting it off a line would cut at the wrong place as
+         * soon as it carries non ASCII bytes.
+         */
+        suspend fun next(): List<String>? {
+            var line = line() ?: return null
+            var length = literalLength(line) ?: return listOf(line)
+
+            val parts = mutableListOf(line)
+            while (true) {
+                val literal = ByteArrayOutputStream(length)
+                streamLiteral(this, length) { literal.write(it) }
+                parts += literal.toString(Charsets.UTF_8)
+                // What follows a literal belongs to the response, whatever it starts with.
+                line = rawLine(readTimeout)
+                parts += line
+                length = literalLength(line) ?: return parts
+            }
+        }
+
+        /**
+         * The next line, or `null` once the command completed with `OK`. Does not know about
+         * literals: the caller has to take one off the socket before asking for the next line.
+         */
+        suspend fun line(timeout: Duration = readTimeout): String? {
+            if (isComplete) return null
+            val line = rawLine(timeout)
+            // NO and BAD complete the command just like OK does.
+            return when (TaggedResponseParser.parse(line, tag)) {
+                ImapStatus.OK -> {
+                    isComplete = true
+                    null
+                }
+                ImapStatus.NO, ImapStatus.BAD -> {
+                    isComplete = true
+                    throw ImapCommandException(message, line)
+                }
+                null -> line
+            }
+        }
+
+        /** Answers a continuation request (`+`) of the server. */
+        suspend fun answer(line: String) = write(line)
+
+        private suspend fun rawLine(timeout: Duration): String {
+            // The response ended without its tagged completion: the connection is gone. Ending
+            // the command as a success here is what made a dead socket look like an empty answer
+            // to whatever was asked.
+            isAligned = false
+            val line = read(timeout, "reading the response to $message") { input.readLine() }
+                ?: throw closed("The connection closed while reading the response to $message")
+            isAligned = true
+            if (isDebug) println("SI $id < $line")
+            return line
         }
     }
 
     internal suspend fun loginUsernamePassword(username: String, password: String) {
-        execute("LOGIN \"$username\" \"$password\"").await()
+        execute("LOGIN \"$username\" \"$password\"")
     }
 
     internal suspend fun login(auth: ImapClient.Auth) {
@@ -337,24 +460,21 @@ data class SocketInstance(
      */
     internal suspend fun loginOauth(email: String, bearer: String) {
         val credentials = Base64.encode("user=$email\u0001auth=Bearer $bearer\u0001\u0001".toByteArray(Charsets.UTF_8))
-        val response = execute("AUTHENTICATE XOAUTH2")
-        var credentialsSent = false
-        response.response.consumeEach { line ->
-            if (!line.startsWith("+")) return@consumeEach
-            this.output.writeStringUtf8(if (credentialsSent) "\r\n" else "$credentials\r\n")
-            credentialsSent = true
+        execute("AUTHENTICATE XOAUTH2") {
+            var credentialsSent = false
+            while (true) {
+                val line = line() ?: break
+                if (!line.startsWith("+")) continue
+                answer(if (credentialsSent) "" else credentials)
+                credentialsSent = true
+            }
         }
     }
 
     override fun close() {
         isClosed = true
-        // A command waiting for a greeting that can no longer arrive would wait forever.
-        isReady.completeExceptionally(ImapConnectionClosedException("The connection closed before the server greeting"))
-        runBlocking {
-            this@SocketInstance.coroutineScope.cancel()
-            this@SocketInstance.socket.close()
-            this@SocketInstance.selectorManager?.close()
-        }
+        this.socket.close()
+        this.selectorManager?.close()
     }
 
     companion object {
@@ -366,6 +486,15 @@ data class SocketInstance(
          */
         private val LITERAL_LENGTH_REGEX = Regex("""\{(\d+)\+?}$""")
 
+        private fun literalLength(line: String): Int? =
+            LITERAL_LENGTH_REGEX.find(line)?.groupValues?.get(1)?.toIntOrNull()
+
         private const val LITERAL_CHUNK_SIZE = 8 * 1024
+
+        /** How long the rest of a response nobody wants any more is read before the connection is given up. */
+        private val SKIP_TIMEOUT = 200.milliseconds
+
+        /** How long a server gets to complete an `IDLE` after `DONE` if there is no [readTimeout]. */
+        private val DONE_TIMEOUT = 30.seconds
     }
 }

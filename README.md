@@ -79,13 +79,14 @@ fun main() = runBlocking {
         val inbox = client.getFolders().first { it.fullName == "INBOX" }
 
         val mails = inbox.getMails {
-            getAll()      // or getId(42) / getUid(15201) / getIds(listOf(1, 2, 3))
+            getAll()      // or getUid(15201) / uidRange(15202) / uids(listOf(4, 9)) / getId(42)
             envelope = true
             flags = true
             uid = true
         }
 
-        mails.forEach { mail ->
+        // A Flow: the fetch runs while it is collected, one mail at a time.
+        mails.collect { mail ->
             println("${mail.uid.await()}: ${mail.subject.await()}")
             println("  from:  ${mail.from.await().joinToString()}")
             println("  flags: ${mail.flags.await().joinToString { it.value }}")
@@ -136,25 +137,40 @@ body.attachments.forEach { attachment ->
 To stream the message source instead, collect `getRawContent()`.
 
 `Email.parse()` creates an `Email` from a stored message source again, without a connection. It takes a
-`ByteArray`, an `InputStream` or a `Flow<ByteArray>`:
+`ByteArray`, an `InputStream` or a `Flow<ByteArray>`, and optionally the UID and the flags the mail should have:
 
 ```kotlin
 val mail = File("mail.eml").inputStream().use { Email.parse(it) }
+```
+
+### Testing without a server
+
+`ImapClient` and `ImapFolder` implement the interfaces `MailClient` and `MailFolder`. The artifact
+`es.jvbabi.overmail:kamel-test` brings an implementation that lives in memory:
+
+```kotlin
+val client = InMemoryMailClient()
+val inbox = client.folder("INBOX")
+inbox.add("From: ada@example.com\r\nSubject: Lunch?\r\n\r\nAt one?\r\n")
+
+inbox.getMails { uidRange(1); all() }.collect { println(it.subject.await()) }
 ```
 
 ### Waiting for new mail (IDLE)
 
 ```kotlin
 val idleFolder = inbox.getIdleFolder()
-launch {
-    idleFolder.idle {
-        onNewMessage { uid -> println("new message: $uid") }
-        onRemovedMessage { uid -> println("removed: $uid") }
-        onFlagChanged { uid, flags -> println("flags of $uid: $flags") }
+val watcher = launch {
+    idleFolder.events().collect { event ->
+        when (event) {
+            is IdleEvent.NewMessage -> println("new message: ${event.sequenceNumber}")
+            is IdleEvent.RemovedMessage -> println("removed: ${event.sequenceNumber}")
+            is IdleEvent.FlagsChanged -> println("flags of ${event.sequenceNumber}: ${event.flags}")
+        }
     }
 }
-// later
-idleFolder.cancel()
+// later: ends the IDLE with DONE
+watcher.cancel()
 ```
 
 ## Name

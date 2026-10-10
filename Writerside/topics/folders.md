@@ -46,8 +46,13 @@ Servers that do not announce these attributes only get `INBOX` detected. Fall ba
 
 ## Messages in a folder
 
+`state()`, `status()`
+: What the server reports about the folder right now, see [](#state).
+
 `getMailIds()`
 : The sequence numbers of all messages in the folder, in ascending order. An empty list means the folder is empty.
+This lists the whole folder; to find out what is new, use [`state()`](#state) and a
+[UID range](fetching-messages.md#selection).
 
 `getIdByUid(uid)`
 : The sequence number of the message with this UID, or `null` if the folder has no such message.
@@ -59,8 +64,46 @@ Servers that do not announce these attributes only get `INBOX` detected. Fall ba
 : Returns an object to watch the folder with, see [](idle.md).
 
 ```kotlin
-val count = inbox.getMailIds().size
+val count = inbox.state().exists
 val position = inbox.getIdByUid(15201)
+```
+
+### Folder state {id="state"}
+
+`state()` and `status()` both return what the server reports about the folder:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `uidValidity` | `Long` | Changes when the server reassigned the UIDs of the folder |
+| `uidNext` | `Long?` | The UID the next new message gets at least. `null` if the server does not say |
+| `exists` | `Int` | The number of messages in the folder |
+
+`state()`
+: Asks with a `SELECT`, on a connection of the folder. Use it when you work with the folder anyway.
+
+`status()`
+: Asks with a `STATUS`, on a connection of the client. No connection of the folder is opened or selected for it,
+which makes it the cheap way to check many folders for changes before deciding which ones to open.
+
+```kotlin
+val changed = client.getFolders().filter { it.status().uidNext != storedUidNext[it.fullName] }
+```
+
+UIDs are only stable while `uidValidity` stays the same. Store it next to the UIDs you keep, and throw those
+away when it changes:
+
+```kotlin
+val state = inbox.state()
+if (state.uidValidity != storedUidValidity) {
+    // every stored UID is void: start over
+}
+
+inbox.getMails {
+    uidRange(lastKnownUid + 1)
+    all()
+}.collect { mail ->
+    // only what arrived since
+}
 ```
 
 ### Sequence numbers and UIDs {id="ids"}
@@ -71,9 +114,14 @@ IMAP has two ways to address a message, and Kamel exposes both:
 |---|------------------------|-----|
 | Type | `Int` / `Long` | `Long` |
 | Meaning | Position in the folder, starting at 1 | Identifier assigned by the server |
-| Stable | No. Deleting a message shifts all later ones | Yes, within one folder |
+| Stable | No. Deleting a message shifts all later ones | Yes, within one folder and one [`uidValidity`](#state) |
 
 Store UIDs if you need to find a message again later.
+
+## Without a server {id="interfaces"}
+
+`ImapFolder` implements the interface `MailFolder`, and `ImapClient` implements `MailClient`. Code written against
+the interfaces can be tested with folders that live in memory, see [](testing.md).
 
 ## Connections
 

@@ -25,7 +25,8 @@ reliable. Until then, pin the version you use and test upgrades against your mai
 - **Passwords are not escaped.** With `BasicAuth`, a username or password containing `"` or `\` makes the login
   fail.
 - **No token refresh.** A client keeps the access token it was created with, see [](tutorial-oauth.md).
-- **No timeouts of its own.** Wrap calls in `withTimeout` if a server that stops answering must not block you.
+- **No connect timeout.** [`readTimeout`](connecting.md) covers a server that stops answering. Opening the
+  connection itself is not limited: wrap the first call in `withTimeout` if that matters.
 
 ## Folders
 
@@ -36,12 +37,12 @@ reliable. Until then, pin the version you use and test upgrades against your mai
 
 ## Fetching
 
-- **`envelope` is required.** A fetch without `envelope = true` returns no messages.
-- **Fields are not loaded later.** Awaiting a field that was not fetched throws a `NotImplementedError`, see
+- **Fields are not loaded later.** Awaiting a field that was not fetched throws an `IllegalStateException`, see
   [](message-fields.md).
-- **`getIds` is a range.** It fetches everything between the smallest and the largest id.
-- **Every fetch lists the folder first.** `getMails` asks for all sequence numbers before it fetches, which costs
-  an extra round trip.
+- **A fetch by sequence number selects first.** It asks for the size of the folder before it fetches, see
+  [](fetching-messages.md#selection). A fetch by UID does not.
+- **A fetch that is not collected to its end can cost a connection.** If the rest of the response is not
+  already there to be skipped, the connection is closed and replaced by a new one.
 
 ## Content
 
@@ -50,11 +51,10 @@ reliable. Until then, pin the version you use and test upgrades against your mai
 
 ## IDLE
 
-- **Sequence numbers, not UIDs.** See [](idle.md#callbacks).
-- **`cancel()` does not stop a running idle.** `IdleFolder.cancel()` and `close()` have no effect while `idle { }`
-  is still running. Cancel the coroutine instead, see [](idle.md#stopping).
-- **No automatic reconnect.** See [](idle.md#long-running).
-- **Callbacks cannot suspend.**
+- **Sequence numbers, not UIDs.** See [](idle.md#events).
+- **No automatic reconnect or renewal.** See [](idle.md#long-running).
+- **No read timeout while idling.** A connection that died silently is only noticed when the `IDLE` is renewed.
+- **Callbacks of `idle { }` cannot suspend.** Collect [`events()`](idle.md#events) instead.
 
 ## Platform
 

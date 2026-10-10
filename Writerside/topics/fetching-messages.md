@@ -4,39 +4,89 @@
 fields of them.
 
 ```kotlin
-val mails: List<Email> = inbox.getMails {
+val mails: Flow<Email> = inbox.getMails {
     getAll()
     envelope = true
     flags = true
     uid = true
 }
+
+mails.collect { mail -> println(mail.subject.await()) }
 ```
+
+## The result is a flow {id="flow"}
+
+`getMails` sends nothing. The fetch runs when the flow is collected, and every collection fetches again. Each
+message is emitted as soon as the server sent it, so a large folder is never held in memory as a whole.
+
+Use the operators of `kotlinx.coroutines.flow` to get what you need:
+
+```kotlin
+val all: List<Email> = inbox.getMails { getAll(); all() }.toList()
+val one: Email? = inbox.getMails { getUid(15201); all() }.firstOrNull()
+```
+
+The connection the fetch runs on is busy until the flow ends. Cancelling the collector cancels the fetch.
 
 ## Which messages {id="selection"}
 
 Call one of these in the block. Without any of them, all messages are fetched. If you call several, the last one
 wins.
 
-`getAll()`
-: Every message in the folder.
-
-`getId(id)`
-: The message with this [sequence number](folders.md#ids).
-
-`getIds(ids)`
-: The **range** from the smallest to the largest sequence number in the list. `getIds(listOf(3, 10))` fetches the
-messages 3 to 10, not only those two.
+By UID:
 
 `getUid(uid)`
 : The message with this UID.
 
+`uids(uids)`
+: Exactly the messages with these UIDs. UIDs the folder does not have are skipped.
+
+`uidRange(from, to)`
+: The messages with the UIDs `from` to `to`, both included. Without `to`, everything from `from` on.
+
+By [sequence number](folders.md#ids):
+
+`getAll()`
+: Every message in the folder.
+
+`getId(id)`
+: The message with this sequence number.
+
+`getIds(ids)`
+: Exactly the messages with these sequence numbers.
+
+`idRange(from, to)`
+: The messages `from` to `to`, both included. Without `to`, everything up to the last message.
+
 ```kotlin
-inbox.getMails { getId(42); all() }
-inbox.getMails { getIds(listOf(1, 50)); all() }
 inbox.getMails { getUid(15201); all() }
+inbox.getMails { uids(listOf(4, 9, 12)); all() }
+inbox.getMails { uidRange(15202); all() }
+inbox.getMails { getId(42); all() }
+inbox.getMails { idRange(1, 50); all() }
 ```
 
-If nothing matches, for example an unknown UID or an empty folder, the result is an empty list.
+The folder is not listed first, so the cost of a fetch depends on what it selects and not on the size of the
+folder. A selection by UID is sent as it is, in one `UID FETCH`. A selection by sequence number is first cut to the
+number of messages in the folder, which costs one `SELECT` unless the connection was just opened.
+
+What is not there gives an empty flow: an unknown UID, a UID range without messages, a sequence number or a range
+behind the last message, an empty collection or an empty folder.
+
+### Fetching what is new {id="new"}
+
+Remember the highest UID you have seen and ask for everything above it:
+
+```kotlin
+inbox.getMails {
+    uidRange(lastKnownUid + 1)
+    all()
+}.collect { mail ->
+    lastKnownUid = mail.uid.await()
+}
+```
+
+If nothing arrived, the flow is empty. Check [`uidValidity`](folders.md#state) before you trust stored UIDs.
 
 ## Which fields {id="fields"}
 
@@ -46,37 +96,52 @@ If nothing matches, for example an unknown UID or an empty folder, the result is
 | `flags` | The flags | `flags` |
 | `uid` | The UID | `uid` |
 
-All three are `false` by default. `all()` sets all three to `true`.
-
-> Always set `envelope = true`. Responses without an envelope are skipped at the moment, so a fetch without it
-> returns an empty list.
-{style="warning"}
+All three are `false` by default. `all()` sets all three to `true`. A fetch by UID fills `uid` in any case.
 
 Request `uid` whenever you want to download the body afterwards: [](message-content.md) needs it.
 
-Reading the fields of the returned `Email` objects is described in [](message-fields.md).
-
-## Fetching in pages
-
-A fetch for a large folder returns one `Email` per message. To load a folder piece by piece, combine
-`getMailIds()` with `getIds()`:
+Leave out what you do not need. To see which messages were read or deleted since, the flags are enough:
 
 ```kotlin
-val ids = inbox.getMailIds()
-
-ids.chunked(100).forEach { page ->
-    val mails = inbox.getMails {
-        getIds(page.map { it.toLong() })
-        all()
-    }
-    // process the page
+inbox.getMails {
+    uidRange(1)
+    flags = true
+    uid = true
+}.collect { mail ->
+    val seen = Email.Flag.Seen in mail.flags.await()
 }
 ```
 
-## Diagnosing parse errors {id="dump"}
+Reading the fields of the returned `Email` objects is described in [](message-fields.md).
 
-If Kamel cannot parse the answer of a server, `getMails` logs an error and throws. Set `dumpMailOnError` to get the
-offending response line, the position the parser stopped at and what it had parsed so far in the log:
+## Messages Kamel cannot read {id="unreadable"}
+
+If Kamel cannot parse the response for a message, the flow fails. Everything that was emitted before stays valid.
+
+To lose only that message instead, take it with `onUnreadable`. The fetch then goes on with the next one:
+
+```kotlin
+inbox.getMails {
+    uidRange(lastKnownUid + 1)
+    all()
+    onUnreadable { unreadable ->
+        println("Could not read ${unreadable.uid}: ${unreadable.cause.message}")
+    }
+}.collect { mail ->
+    // every message that could be read
+}
+```
+
+| Property | Description |
+|----------|-------------|
+| `sequenceNumber` | The position of the message in the folder |
+| `uid` | Its UID, or `null` if the response did not carry one that could be read |
+| `cause` | What the parser failed with |
+
+### Diagnosing parse errors {id="dump"}
+
+Kamel logs an error for every response it cannot parse. Set `dumpMailOnError` to get the offending response
+line, the position the parser stopped at and what it had parsed so far in the log:
 
 ```kotlin
 inbox.getMails {

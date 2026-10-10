@@ -1,6 +1,6 @@
 # Message fields
 
-`getMails { }` returns `Email` objects. An `Email` gives access to the envelope, the flags and the UID of a
+`getMails { }` emits `Email` objects. An `Email` gives access to the envelope, the flags and the UID of a
 message, and to its [content](message-content.md).
 
 ## Reading fields
@@ -30,9 +30,8 @@ val from: Set<EmailUser> = mail.from.await()
 | `uid` | `Long` | `uid` | UID within the folder |
 | `flags` | `Set<Email.Flag>` | `flags` | See [](#flags) |
 
-> Only await fields you requested. Loading a missing field afterwards is not implemented yet: `await()` throws a
-> `NotImplementedError`. The failure happens in the coroutine scope of the client and cancels it, unless you
-> passed a scope with a `SupervisorJob`.
+> Only await fields you requested. A missing field is not loaded afterwards: `await()` throws an
+> `IllegalStateException` that names the field.
 {style="warning"}
 
 ### Without suspending {id="values"}
@@ -104,7 +103,7 @@ For a quick look while developing, `print()` writes all fields of a message to s
 field, so the fetch must have requested all of them:
 
 ```kotlin
-inbox.getMails { getUid(15201); all() }.forEach { it.print() }
+inbox.getMails { getUid(15201); all() }.collect { it.print() }
 ```
 
 ```text
