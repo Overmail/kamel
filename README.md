@@ -140,10 +140,20 @@ to avoid confusion with KMail (the KDE mail client) or
 K9-Mail (the Android mail client), I renamed it to the
 similar-sounding Kamel.
 
+## Documentation
+
+📖 **[Documentation](https://overmail.github.io/kamel/)**: tutorials and guides for every feature, plus the known limitations.
+
+🔎 **[Kotlin API reference](https://overmail.github.io/kamel/api/)**: generated with Dokka.
+
+Both are deployed with every release. To work on the docs locally:
+
+- **Guides**: open [`Writerside/`](./Writerside) with the Writerside plugin of IntelliJ IDEA for a live preview
+- **API docs**: `./gradlew dokkaGenerateHtml` → `build/dokka/html/index.html`
+
 ## Status
 
-Early stage. The API is not stable yet, and there are no full docs — for anything not covered here,
-look at the sources under `src/main/kotlin`.
+Early stage. The API is not stable yet.
 
 ## License
 

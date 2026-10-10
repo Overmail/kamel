@@ -6,6 +6,7 @@ logback = "1.6.2"
 eclipse-angus-jakarta = "2.0.5"
 maven-publish = "0.37.0"
 kotest = "6.2.4"
+dokka = "2.2.0"
 
 [libraries]
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
@@ -21,3 +22,4 @@ kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }
 kotest = { id = "io.kotest", version.ref = "kotest" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
