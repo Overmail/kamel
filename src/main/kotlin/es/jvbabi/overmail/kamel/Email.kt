@@ -2,9 +2,13 @@ package es.jvbabi.overmail.kamel
 
 import es.jvbabi.overmail.kamel.util.MimeUtility
 import es.jvbabi.overmail.kamel.util.Optional
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.fold
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import kotlin.time.Instant
 
 class EmailUser(
@@ -45,10 +49,28 @@ class EmailUser(
 
 
 @Suppress("unused")
-class Email internal constructor(
-    internal val folder: ImapFolder
+class Email private constructor(
+    /** `null` for an email that was parsed from its source, see [parse]. */
+    internal val folder: ImapFolder?,
+    /** The message source of an email that was parsed from it, `null` for an email of a [folder]. */
+    internal val source: ByteArray?
 ) {
+    internal constructor(folder: ImapFolder) : this(folder, null)
+
     private val content = EmailContent(this)
+
+    /**
+     * A field that is set is returned without touching the connection, so it also works for an
+     * email without a [folder].
+     */
+    private fun <T> field(name: String, value: Optional<T>): Deferred<T> {
+        if (value is Optional.Set) return CompletableDeferred(value.value)
+
+        val folder = folder ?: return CompletableDeferred<T>().apply {
+            completeExceptionally(IllegalStateException("$name is not available: this email was parsed from its source and has no connection to load it with"))
+        }
+        return folder.imapClient.coroutineScope.async { TODO("Use connection to download $name") }
+    }
 
     /**
      * The message source as the server sent it, in chunks, byte for byte.
@@ -67,110 +89,73 @@ class Email internal constructor(
         internal set
 
     val subject: Deferred<String?>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.subjectValue.let { if (it is Optional.Set) return@async it.value }
-
-            TODO("Use connection to download subject")
-        }
+        get() = field("subject", subjectValue)
 
     var sentAtValue: Optional<Instant> = Optional.Empty()
         internal set
 
     val sentAt: Deferred<Instant>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.sentAtValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download sentAt")
-        }
+        get() = field("sentAt", sentAtValue)
 
     var sendersValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val senders: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.sendersValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download senders")
-        }
+        get() = field("senders", sendersValue)
 
     var fromValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val from: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.fromValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download from")
-        }
+        get() = field("from", fromValue)
 
     var replyToValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val replyTo: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.replyToValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download replyTo")
-        }
+        get() = field("replyTo", replyToValue)
 
     var toValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val to: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.toValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download to")
-        }
+        get() = field("to", toValue)
 
     var ccValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val cc: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.ccValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Verbindung verwenden, um cc herunterzuladen")
-        }
+        get() = field("cc", ccValue)
 
     var bccValue: Optional<Set<EmailUser>> = Optional.Empty()
         internal set
 
     val bcc: Deferred<Set<EmailUser>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.bccValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Verbindung verwenden, um bcc herunterzuladen")
-        }
+        get() = field("bcc", bccValue)
 
     var messageIdValue: Optional<String> = Optional.Empty()
         internal set
 
     val messageId: Deferred<String>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.messageIdValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download messageId")
-        }
+        get() = field("messageId", messageIdValue)
 
     var inReplyToValue: Optional<String?> = Optional.Empty()
         internal set
 
     val inReplyTo: Deferred<String?>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.inReplyToValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download inReplyTo")
-        }
+        get() = field("inReplyTo", inReplyToValue)
 
     var uidValue: Optional<Long> = Optional.Empty()
         internal set
 
     val uid: Deferred<Long>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.uidValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download uid")
-        }
+        get() = field("uid", uidValue)
 
     var flagsValue: Optional<Set<Flag>> = Optional.Empty()
         internal set
 
     val flags: Deferred<Set<Flag>>
-        get() = folder.imapClient.coroutineScope.async {
-            this@Email.flagsValue.let { if (it is Optional.Set) return@async it.value }
-            TODO("Use connection to download flags")
-        }
+        get() = field("flags", flagsValue)
 
     class Content(
         /** The message source, byte for byte. */
@@ -238,6 +223,36 @@ class Email internal constructor(
                 }
             }
         }
+    }
+
+    companion object {
+        /**
+         * Creates an email from its message source, e.g. the bytes [getRawContent] or
+         * [Content.raw] returned earlier, or an `.eml` file. No connection is involved.
+         *
+         * The fields of the envelope are read from the headers. [uid] and [flags] are not part of
+         * a message source and stay empty, as does [sentAt] without a readable `Date` header:
+         * awaiting them fails with an [IllegalStateException]. [getContent] and [getRawContent]
+         * work on [raw].
+         *
+         * @throws IllegalArgumentException if [raw] cannot be read as a message
+         */
+        fun parse(raw: ByteArray): Email = EmailParser.parse(raw)
+
+        /**
+         * Reads [input] to its end and creates an email from it, see [parse]. The read blocks and
+         * [input] is not closed.
+         */
+        fun parse(input: InputStream): Email = parse(input.readBytes())
+
+        /**
+         * Collects [raw] and creates an email from it, see [parse].
+         */
+        suspend fun parse(raw: Flow<ByteArray>): Email =
+            parse(raw.fold(ByteArrayOutputStream()) { buffer, chunk -> buffer.apply { write(chunk) } }.toByteArray())
+
+        /** Wraps [source] without reading its headers. */
+        internal fun ofSource(source: ByteArray) = Email(null, source)
     }
 
     suspend fun print() {

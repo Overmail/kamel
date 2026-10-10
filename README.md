@@ -135,6 +135,13 @@ body.attachments.forEach { attachment ->
 
 To stream the message source instead, collect `getRawContent()`.
 
+`Email.parse()` creates an `Email` from a stored message source again, without a connection. It takes a
+`ByteArray`, an `InputStream` or a `Flow<ByteArray>`:
+
+```kotlin
+val mail = File("mail.eml").inputStream().use { Email.parse(it) }
+```
+
 ### Waiting for new mail (IDLE)
 
 ```kotlin
