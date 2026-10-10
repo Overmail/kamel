@@ -1,5 +1,7 @@
 package es.jvbabi.overmail.kamel
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -33,7 +35,15 @@ abstract class ClosableClientPool(
             socketInstances.firstOrNull { !it.commandMutex.isLocked }?.let { return it }
             // Every instance is busy: a new one, unless the pool is full, in which case the
             // command waits on the mutex of whichever instance it gets.
-            if (socketInstances.size >= maxPoolSize) return socketInstances.random()
+            //
+            // Unless the caller is busy on one of them itself, as the collector of a fetch that
+            // downloads a body for every mail is. Its fetch only goes on once this command is
+            // done, so waiting for a connection that other such collectors hold in the same way
+            // would never end. It gets a connection beyond the limit instead.
+            val caller = currentCoroutineContext()[Job]
+            if (socketInstances.size >= maxPoolSize && socketInstances.none { it.isHeldBy(caller) }) {
+                return socketInstances.random()
+            }
         }
 
         logger.debug("Creating new socket instance")

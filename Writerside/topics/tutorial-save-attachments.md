@@ -24,8 +24,8 @@ val mail = inbox.getMails {
 }.firstOrNull() ?: error("No message with this UID")
 ```
 
-> A fetch without `envelope = true` returns no messages, see [](fetching-messages.md#fields).
-{style="note"}
+`getMails` returns a `Flow`, and `firstOrNull()` collects it up to its first message. Add
+`import kotlinx.coroutines.flow.firstOrNull`.
 
 </step>
 </procedure>

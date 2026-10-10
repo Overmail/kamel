@@ -28,7 +28,7 @@ fun main() {
                             flags = true
                             uid = true
                             dumpMailOnError = true
-                        }.forEach { email ->
+                        }.collect { email ->
                             println(email.subject.await())
                             println(email.flags.await())
                             val body = email.getContent(includeAttachments = true)

@@ -10,11 +10,18 @@ import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
 import io.ktor.utils.io.readLine
 import io.ktor.utils.io.writeStringUtf8
+import io.kotest.matchers.string.shouldContain
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
@@ -61,13 +68,13 @@ class SocketInstanceTest : FunSpec({
                 val instance = connect(server)
 
                 val exception = shouldThrow<ImapCommandException> {
-                    instance.execute("SELECT \"Sent Items\"").await()
+                    instance.execute("SELECT \"Sent Items\"")
                 }
                 exception.response shouldBe "A000 BAD Error in IMAP command SELECT: Too many arguments"
 
                 // Used to block forever: on BAD the reader job kept reading and never unlocked
                 // commandMutex.
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -76,7 +83,7 @@ class SocketInstanceTest : FunSpec({
         }
     }
 
-    test("a NO completion closes the response channel with the failure") {
+    test("a NO completion fails the read of the response") {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         var server: ServerSocket? = null
         try {
@@ -84,8 +91,10 @@ class SocketInstanceTest : FunSpec({
                 server = scope.startServer { tag, _ -> listOf("$tag NO Mailbox does not exist") }
                 val instance = connect(server)
 
-                val response = instance.execute("SELECT \"Nope\"")
-                shouldThrow<ImapCommandException> { response.response.consumeEach { } }
+                shouldThrow<ImapCommandException> { instance.execute("SELECT \"Nope\"") { next() } }
+
+                // The completion was read, so the socket carries the next command.
+                instance.isAlive shouldBe true
                 instance.close()
             }
         } finally {
@@ -94,7 +103,7 @@ class SocketInstanceTest : FunSpec({
         }
     }
 
-    test("await drains responses longer than the channel buffer") {
+    test("a response nobody reads is dropped") {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         var server: ServerSocket? = null
         try {
@@ -102,9 +111,9 @@ class SocketInstanceTest : FunSpec({
                 server = scope.startServer { tag, _ -> (1..200).map { "* $it EXISTS" } + "$tag OK completed" }
                 val instance = connect(server)
 
-                // Deadlocks from line 65 of the response on if await() does not consume the channel.
-                instance.execute("NOOP").await()
-                instance.execute("NOOP").await()
+                // The second command would read the rest of the first response as its own.
+                instance.execute("NOOP")
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -122,7 +131,7 @@ class SocketInstanceTest : FunSpec({
 
                 // Used to end the command as a success: the reader stopped at the end of the
                 // stream, and the caller took the response it got so far for the whole answer.
-                shouldThrow<ImapConnectionClosedException> { instance.execute("LIST \"\" \"*\"").await() }
+                shouldThrow<ImapConnectionClosedException> { instance.execute("LIST \"\" \"*\"") }
                 instance.close()
             }
         } finally {
@@ -138,11 +147,11 @@ class SocketInstanceTest : FunSpec({
             withTimeout(10.seconds) {
                 server = scope.startServer { tag, _ -> listOf("$tag OK completed") }
                 val instance = connect(server)
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
 
                 instance.isAlive shouldBe false
-                shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP").await() }
+                shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP") }
             }
         } finally {
             server?.close()
@@ -170,7 +179,7 @@ class SocketInstanceTest : FunSpec({
 
                 // Only works if the reader stopped after exactly `message.size` bytes: everything
                 // after them is the closing paren and the tagged completion of the FETCH.
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -195,7 +204,7 @@ class SocketInstanceTest : FunSpec({
                 }
                 exception.response shouldBe "A000 NO Server unavailable"
 
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -220,7 +229,7 @@ class SocketInstanceTest : FunSpec({
                 instance.executeWithLiterals("UID FETCH 1 BODY.PEEK[]") { received.write(it) }
 
                 received.toByteArray() shouldBe message
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -246,7 +255,7 @@ class SocketInstanceTest : FunSpec({
                 instance.executeWithLiterals("UID FETCH 1 BODY.PEEK[]") { received.write(it) }
 
                 received.toByteArray() shouldBe message
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -254,7 +263,7 @@ class SocketInstanceTest : FunSpec({
             scope.cancel()
         }
     }
-    test("a literal is handed over as one item, framed by its byte count") {
+    test("a literal is one item of its response, framed by its byte count") {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         var server: ServerSocket? = null
         try {
@@ -270,20 +279,122 @@ class SocketInstanceTest : FunSpec({
                 }
                 val instance = connect(server)
 
-                val items = mutableListOf<String>()
-                instance.execute("FETCH 1 (ENVELOPE)").response.consumeEach { items += it }
+                val responses = instance.execute("FETCH 1 (ENVELOPE)") {
+                    buildList { while (true) add(next() ?: break) }
+                }
 
-                items shouldBe listOf(
-                    head.trimEnd('\r', '\n'),
-                    subject,
-                    " NIL))",
-                    "A000 OK FETCH completed"
-                )
+                responses shouldBe listOf(listOf(head.trimEnd('\r', '\n'), subject, " NIL))"))
                 instance.close()
             }
         } finally {
             server?.close()
             scope.cancel()
+        }
+    }
+
+    test("a server that stops answering fails the command after the read timeout") {
+        withServerScope { scope ->
+            // Reads the command and never answers it; the socket stays open.
+            val server = scope.startScriptedServer { input, _ -> while (input.readLine() != null) { } }
+            val instance = connect(server, readTimeout = 300.milliseconds)
+
+            shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP") }.message shouldContain "300ms"
+
+            // What it would still send belongs to a command nobody waits for any more.
+            instance.isAlive shouldBe false
+            server.close()
+        }
+    }
+
+    test("a server that never greets fails the first command after the read timeout") {
+        withServerScope { scope ->
+            val server = aSocket(SelectorManager(Dispatchers.IO)).tcp().bind("127.0.0.1", 0)
+            scope.launch { while (true) server.accept() }
+            val instance = connect(server, readTimeout = 300.milliseconds)
+
+            shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP") }
+            server.close()
+        }
+    }
+
+    test("a literal shorter than announced fails the command") {
+        withServerScope { scope ->
+            val server = scope.startScriptedServer { input, output ->
+                input.readLine()
+                output.writeStringUtf8("* 1 FETCH (BODY[] {5678}\r\nSubject: cut off")
+                output.flush()
+            }
+
+            // Streamed, as a body is ...
+            val received = ByteArrayOutputStream()
+            shouldThrow<ImapConnectionClosedException> {
+                connect(server).executeWithLiterals("UID FETCH 1 BODY.PEEK[]") { received.write(it) }
+            }
+            received.size() shouldBe 0
+
+            // ... and as an item of a response, as in an envelope.
+            shouldThrow<ImapConnectionClosedException> { connect(server).execute("FETCH 1 (ENVELOPE)") { next() } }
+            server.close()
+        }
+    }
+
+    test("cancelling the caller cancels the read and closes the half read socket") {
+        withServerScope { scope ->
+            val server = scope.startScriptedServer { input, output ->
+                input.readLine()
+                output.writeStringUtf8("* 1 EXISTS\r\n")
+                // The tagged completion never comes.
+                while (input.readLine() != null) { }
+            }
+            val instance = connect(server)
+
+            val reachedResponse = CompletableDeferred<Unit>()
+            val command = launch {
+                instance.execute("NOOP") {
+                    next()
+                    reachedResponse.complete(Unit)
+                    next()
+                }
+            }
+            reachedResponse.await()
+            command.cancelAndJoin()
+
+            instance.isAlive shouldBe false
+            shouldThrow<ImapConnectionClosedException> { instance.execute("NOOP") }
+            server.close()
+        }
+    }
+
+    test("a caller cancelled before its command was sent does not leave the connection behind") {
+        withServerScope { scope ->
+            // Never greets, so the command waits before it is written.
+            val server = aSocket(SelectorManager(Dispatchers.IO)).tcp().bind("127.0.0.1", 0)
+            scope.launch { while (true) server.accept() }
+            val instance = connect(server)
+
+            val command = launch { instance.execute("NOOP") }
+            delay(200.milliseconds)
+            command.cancelAndJoin()
+
+            // Whatever arrives now would be read by the next command as its own.
+            instance.isAlive shouldBe false
+            server.close()
+        }
+    }
+
+    test("a command runs in the context of its caller") {
+        withServerScope { scope ->
+            val server = scope.startServer { tag, _ -> listOf("* 1 EXISTS", "$tag OK completed") }
+            val instance = connect(server)
+
+            val caller = CoroutineName("the caller")
+            val reader = withContext(caller) {
+                instance.execute("NOOP") { currentCoroutineContext()[CoroutineName] }
+            }
+
+            reader shouldBe caller
+            instance.close()
+            server.close()
         }
     }
 })

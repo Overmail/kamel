@@ -6,12 +6,19 @@ import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.aSocket
 import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.readLine
 import io.ktor.utils.io.writeByteArray
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Starts a fake IMAP server on the loopback interface. It greets every client and answers each
@@ -54,15 +61,66 @@ internal suspend fun CoroutineScope.startServer(respond: (tag: String, command: 
         respond(tag, command).joinToString("") { "$it\r\n" }.toByteArray(Charsets.UTF_8)
     }
 
-internal suspend fun connect(server: ServerSocket): SocketInstance {
+/**
+ * Starts a fake IMAP server that greets every client and then leaves the connection to [serve].
+ * For conversations [startRawServer] cannot hold: ones that stop halfway, never answer, or need
+ * the server to remember where it is, like `IDLE`.
+ */
+internal suspend fun CoroutineScope.startScriptedServer(
+    serve: suspend (input: ByteReadChannel, output: ByteWriteChannel) -> Unit
+): ServerSocket {
+    val server = aSocket(SelectorManager(Dispatchers.IO)).tcp().bind("127.0.0.1", 0)
+    launch {
+        while (true) {
+            val socket = server.accept()
+            launch {
+                val input = socket.openReadChannel()
+                val output = socket.openWriteChannel(autoFlush = true)
+                output.writeStringUtf8("* OK IMAP4rev1 ready\r\n")
+                try {
+                    serve(input, output)
+                } finally {
+                    socket.close()
+                }
+            }
+        }
+    }
+    return server
+}
+
+internal suspend fun connect(server: ServerSocket, readTimeout: Duration = Duration.INFINITE): SocketInstance {
     val port = (server.localAddress as InetSocketAddress).port
     val socket = aSocket(SelectorManager(Dispatchers.IO)).tcp().connect("127.0.0.1", port)
     return SocketInstance(
         socket = socket,
         input = socket.openReadChannel(),
         output = socket.openWriteChannel(autoFlush = true),
-        isDebug = false
+        isDebug = false,
+        readTimeout = readTimeout,
     )
+}
+
+/** A client for the account on [server], with what it needs to run in [scope]. */
+internal fun clientFor(server: ServerSocket, scope: CoroutineScope, readTimeout: Duration = 10.seconds) = ImapClient(
+    host = "127.0.0.1",
+    port = (server.localAddress as InetSocketAddress).port,
+    ssl = false,
+    auth = ImapClient.Auth.BasicAuth("user", "password"),
+    coroutineScope = scope,
+    readTimeout = readTimeout,
+)
+
+/**
+ * Runs [block] with a scope for a fake server and the sockets talking to it, under a timeout:
+ * the bugs under test tend to show up as a hang, not as a wrong result.
+ */
+internal suspend fun withServerScope(block: suspend CoroutineScope.(scope: CoroutineScope) -> Unit) {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    try {
+        withTimeout(30.seconds) { block(scope) }
+    } finally {
+        scope.cancel()
+    }
 }
 
 /**

@@ -77,7 +77,7 @@ class LoginTest : FunSpec({
                 received.await() shouldBe "user=user@example.com\u0001auth=Bearer ya29.token\u0001\u0001"
 
                 // The socket is usable afterwards.
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {
@@ -99,7 +99,7 @@ class LoginTest : FunSpec({
                 }
                 exception.response shouldBe "A000 NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)"
 
-                instance.execute("NOOP").await()
+                instance.execute("NOOP")
                 instance.close()
             }
         } finally {

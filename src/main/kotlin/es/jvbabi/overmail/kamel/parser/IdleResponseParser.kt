@@ -1,12 +1,7 @@
 package es.jvbabi.overmail.kamel.parser
 
 import es.jvbabi.overmail.kamel.Email
-
-internal sealed interface IdleEvent {
-    data class NewMessage(val messageIndex: Long) : IdleEvent
-    data class RemovedMessage(val messageIndex: Long) : IdleEvent
-    data class FlagsChanged(val messageIndex: Long, val flags: List<Email.Flag>) : IdleEvent
-}
+import es.jvbabi.overmail.kamel.IdleEvent
 
 /**
  * Parses the untagged responses a server sends while the connection is in `IDLE`.
@@ -29,7 +24,7 @@ internal object IdleResponseParser {
 
             // e.g. * 5 FETCH (FLAGS (\Seen \Flagged))
             trimmed.startsWith("* ") && "FETCH" in trimmed && "FLAGS" in trimmed -> IdleEvent.FlagsChanged(
-                messageIndex = trimmed.substringAfter("* ").substringBefore(" FETCH").toLong(),
+                sequenceNumber = trimmed.substringAfter("* ").substringBefore(" FETCH").toLong(),
                 flags = trimmed
                     .substringAfter("FLAGS (")
                     .substringBefore(")")

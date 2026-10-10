@@ -4,7 +4,6 @@ import es.jvbabi.overmail.kamel.util.MimeUtility
 import es.jvbabi.overmail.kamel.util.Optional
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.fold
 import java.io.ByteArrayOutputStream
@@ -60,16 +59,20 @@ class Email private constructor(
     private val content = EmailContent(this)
 
     /**
-     * A field that is set is returned without touching the connection, so it also works for an
-     * email without a [folder].
+     * A field is never loaded later: one that is not set fails with an [IllegalStateException]
+     * naming it.
      */
     private fun <T> field(name: String, value: Optional<T>): Deferred<T> {
         if (value is Optional.Set) return CompletableDeferred(value.value)
 
-        val folder = folder ?: return CompletableDeferred<T>().apply {
-            completeExceptionally(IllegalStateException("$name is not available: this email was parsed from its source and has no connection to load it with"))
+        return CompletableDeferred<T>().apply {
+            completeExceptionally(
+                IllegalStateException(
+                    if (folder == null) "$name is not available: this email was parsed from its source, which does not carry it"
+                    else "$name is not available: it was not part of the fetch this email came from"
+                )
+            )
         }
-        return folder.imapClient.coroutineScope.async { TODO("Use connection to download $name") }
     }
 
     /**
@@ -231,25 +234,32 @@ class Email private constructor(
          * [Content.raw] returned earlier, or an `.eml` file. No connection is involved.
          *
          * The fields of the envelope are read from the headers. [uid] and [flags] are not part of
-         * a message source and stay empty, as does [sentAt] without a readable `Date` header:
-         * awaiting them fails with an [IllegalStateException]. [getContent] and [getRawContent]
-         * work on [raw].
+         * a message source: pass them to get the mail a folder would hand out. Left out, they stay
+         * empty, as does [sentAt] without a readable `Date` header, and awaiting them fails with
+         * an [IllegalStateException]. [getContent] and [getRawContent] work on [raw].
          *
          * @throws IllegalArgumentException if [raw] cannot be read as a message
          */
-        fun parse(raw: ByteArray): Email = EmailParser.parse(raw)
+        fun parse(raw: ByteArray, uid: Long? = null, flags: Set<Flag>? = null): Email = EmailParser.parse(raw).apply {
+            uid?.let { uidValue = Optional.Set(it) }
+            flags?.let { flagsValue = Optional.Set(it) }
+        }
 
         /**
          * Reads [input] to its end and creates an email from it, see [parse]. The read blocks and
          * [input] is not closed.
          */
-        fun parse(input: InputStream): Email = parse(input.readBytes())
+        fun parse(input: InputStream, uid: Long? = null, flags: Set<Flag>? = null): Email =
+            parse(input.readBytes(), uid, flags)
 
         /**
          * Collects [raw] and creates an email from it, see [parse].
          */
-        suspend fun parse(raw: Flow<ByteArray>): Email =
-            parse(raw.fold(ByteArrayOutputStream()) { buffer, chunk -> buffer.apply { write(chunk) } }.toByteArray())
+        suspend fun parse(raw: Flow<ByteArray>, uid: Long? = null, flags: Set<Flag>? = null): Email = parse(
+            raw.fold(ByteArrayOutputStream()) { buffer, chunk -> buffer.apply { write(chunk) } }.toByteArray(),
+            uid,
+            flags,
+        )
 
         /** Wraps [source] without reading its headers. */
         internal fun ofSource(source: ByteArray) = Email(null, source)

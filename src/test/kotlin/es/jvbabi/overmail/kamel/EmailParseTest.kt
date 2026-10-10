@@ -142,6 +142,22 @@ class EmailParseTest : FunSpec({
             shouldThrow<IllegalStateException> { email.flags.await() }
         }
 
+        test("takes uid and flags from whoever knows them") {
+            val email = Email.parse(
+                source("From: ada@example.com", "Subject: Notes"),
+                uid = 4392,
+                flags = setOf(Email.Flag.Seen, Email.Flag.Other("\$Forwarded")),
+            )
+
+            email.uid.await() shouldBe 4392L
+            email.flags.await() shouldBe setOf(Email.Flag.Seen, Email.Flag.Other("\$Forwarded"))
+            email.subject.await() shouldBe "Notes"
+        }
+
+        test("keeps flags that are known to be empty apart from flags that are unknown") {
+            Email.parse(source("From: ada@example.com"), flags = emptySet()).flags.await() shouldBe emptySet()
+        }
+
         test("fails for sentAt without a readable Date header") {
             shouldThrow<IllegalStateException> { Email.parse(source("From: ada@example.com")).sentAt.await() }
             shouldThrow<IllegalStateException> { Email.parse(source("Date: yesterday")).sentAt.await() }
