@@ -112,7 +112,9 @@ launch {
 ```
 
 The [`readTimeout`](connecting.md) of the client does not apply while idling, since a quiet folder is what an
-`IDLE` waits for. A connection that died without being closed is noticed at the next renewal.
+`IDLE` waits for. A connection that died without being closed is noticed at the next renewal: the server gets ten
+seconds, or the `readTimeout` if that is shorter, to complete the `IDLE` after `DONE`, after which the connection
+is closed.
 
 Changes that happen between two idle periods are not reported. If you must not miss anything, fetch
 [what is new](fetching-messages.md#new) after every renewal.

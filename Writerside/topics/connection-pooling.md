@@ -29,13 +29,30 @@ For every command, the pool:
 
 1. drops connections that are no longer alive, which includes those a cancelled or timed out command left in the
    middle of a response,
-2. hands out a connection that is currently free, if there is one,
-3. otherwise opens a new one, if the pool is not full,
-4. otherwise picks one of the busy connections, and the command waits for its turn. A command issued from inside
+2. hands out a connection that is currently free and was used recently, if there is one,
+3. otherwise checks a free connection that has been quiet for a while, see [below](#checks), and hands it out if it
+   answers,
+4. otherwise opens a new one, if the pool is not full,
+5. otherwise picks one of the busy connections, and the command waits for its turn. A command issued from inside
    the collector of a fetch opens a connection instead, see above.
 
 Opening a connection means connecting, logging in and, for a folder, selecting it. A command that needs a new
 connection therefore takes a little longer than one that reuses an idle one.
+
+## Quiet connections {id="checks"}
+
+A NAT, a firewall or a load balancer forgets a connection that has been quiet for a while, often after a few
+minutes, and does so without telling either side. The socket still looks open, and a command on it would only
+fail after the [`readTimeout`](connecting.md).
+
+So a free connection that has not completed a command for `checkConnectionsAfter` (`60.seconds` by default) is
+asked with a `NOOP` before it is handed out. If the server does not answer within `connectionCheckTimeout`
+(`5.seconds` by default), the connection is closed and dropped, and the pool goes on with the next one or opens a
+new one. The command never sees the dead connection. A connection used more recently is handed out without the
+extra round trip.
+
+Both apply to the client pool and to the pools of its folders. Kamel also enables TCP keepalive on its sockets,
+but without tuning the operating system that only notices a dead connection after hours.
 
 ## Working in parallel
 

@@ -88,7 +88,11 @@ internal suspend fun CoroutineScope.startScriptedServer(
     return server
 }
 
-internal suspend fun connect(server: ServerSocket, readTimeout: Duration = Duration.INFINITE): SocketInstance {
+internal suspend fun connect(
+    server: ServerSocket,
+    readTimeout: Duration = Duration.INFINITE,
+    doneTimeout: Duration = SocketInstance.DONE_TIMEOUT,
+): SocketInstance {
     val port = (server.localAddress as InetSocketAddress).port
     val socket = aSocket(SelectorManager(Dispatchers.IO)).tcp().connect("127.0.0.1", port)
     return SocketInstance(
@@ -97,17 +101,26 @@ internal suspend fun connect(server: ServerSocket, readTimeout: Duration = Durat
         output = socket.openWriteChannel(autoFlush = true),
         isDebug = false,
         readTimeout = readTimeout,
+        doneTimeout = doneTimeout,
     )
 }
 
 /** A client for the account on [server], with what it needs to run in [scope]. */
-internal fun clientFor(server: ServerSocket, scope: CoroutineScope, readTimeout: Duration = 10.seconds) = ImapClient(
+internal fun clientFor(
+    server: ServerSocket,
+    scope: CoroutineScope,
+    readTimeout: Duration = 10.seconds,
+    checkConnectionsAfter: Duration = 60.seconds,
+    connectionCheckTimeout: Duration = 5.seconds,
+) = ImapClient(
     host = "127.0.0.1",
     port = (server.localAddress as InetSocketAddress).port,
     ssl = false,
     auth = ImapClient.Auth.BasicAuth("user", "password"),
     coroutineScope = scope,
     readTimeout = readTimeout,
+    checkConnectionsAfter = checkConnectionsAfter,
+    connectionCheckTimeout = connectionCheckTimeout,
 )
 
 /**

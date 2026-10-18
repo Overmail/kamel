@@ -53,7 +53,8 @@ reliable. Until then, pin the version you use and test upgrades against your mai
 
 - **Sequence numbers, not UIDs.** See [](idle.md#events).
 - **No automatic reconnect or renewal.** See [](idle.md#long-running).
-- **No read timeout while idling.** A connection that died silently is only noticed when the `IDLE` is renewed.
+- **No read timeout while idling.** A connection that died silently is only noticed when the `IDLE` is renewed,
+  then within ten seconds.
 - **Callbacks of `idle { }` cannot suspend.** Collect [`events()`](idle.md#events) instead.
 
 ## Platform

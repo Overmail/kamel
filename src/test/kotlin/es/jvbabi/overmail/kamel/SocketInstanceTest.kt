@@ -26,6 +26,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
+import io.kotest.matchers.comparables.shouldBeLessThan
 
 /**
  * A server that answers the first command halfway and then drops the connection, the way one
@@ -394,6 +396,30 @@ class SocketInstanceTest : FunSpec({
 
             reader shouldBe caller
             instance.close()
+            server.close()
+        }
+    }
+
+    test("an IDLE the server never completes is given up after the DONE timeout") {
+        withServerScope { scope ->
+            // Answers the IDLE and reports a change, then goes silent, the way a connection a NAT
+            // dropped while idling does: the DONE never arrives anywhere.
+            val server = scope.startScriptedServer { input, output ->
+                val tag = input.readLine()!!.substringBefore(' ')
+                output.writeStringUtf8("+ idling\r\n* 23 EXISTS\r\n")
+                while (input.readLine() != null) { }
+                output.writeStringUtf8("$tag OK never sent\r\n")
+            }
+            val instance = connect(server, readTimeout = 20.seconds, doneTimeout = 300.milliseconds)
+
+            val started = TimeSource.Monotonic.markNow()
+            shouldThrow<IllegalStateException> {
+                instance.idle { error("seen enough") }
+            }
+
+            // Used to wait the whole readTimeout before the caller got its connection back.
+            started.elapsedNow() shouldBeLessThan 5.seconds
+            instance.isAlive shouldBe false
             server.close()
         }
     }

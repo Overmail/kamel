@@ -11,7 +11,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
+import io.kotest.matchers.comparables.shouldBeLessThan
+import io.kotest.matchers.shouldBe
+import io.ktor.utils.io.readLine
+import io.ktor.utils.io.writeStringUtf8
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Drives [ImapClient] against [startServer], over the pool it shares with everything else on the
@@ -93,7 +101,125 @@ class EmailClientTest : FunSpec({
             scope.cancel()
         }
     }
+
+    test("a quiet connection that no longer answers is replaced before a command runs on it") {
+        withServerScope { scope ->
+            val log = PoolServerLog()
+            // The first connection stops answering after its first LIST, the way one a NAT
+            // forgot does; every connection after it answers.
+            val server = scope.startPoolServer(log) { connection, commands -> connection == 1 && commands > 2 }
+            val client = clientFor(
+                server, scope,
+                readTimeout = 20.seconds,
+                checkConnectionsAfter = 200.milliseconds,
+                connectionCheckTimeout = 300.milliseconds,
+            )
+
+            client.getFolders().map { it.fullName } shouldContainExactly listOf("INBOX")
+            delay(400.milliseconds)
+
+            val started = TimeSource.Monotonic.markNow()
+            // Used to fail with an ImapConnectionClosedException, after the whole readTimeout.
+            client.getFolders().map { it.fullName } shouldContainExactly listOf("INBOX")
+            started.elapsedNow() shouldBeLessThan 5.seconds
+
+            log.commands.filter { it.first == 1 }.map { it.second } shouldContainExactly listOf("LOGIN", "LIST", "NOOP")
+            log.commands.filter { it.first == 2 }.map { it.second } shouldContainExactly listOf("LOGIN", "LIST")
+            client.close()
+            server.close()
+        }
+    }
+
+    test("a quiet connection that still answers is checked and kept") {
+        withServerScope { scope ->
+            val log = PoolServerLog()
+            val server = scope.startPoolServer(log) { _, _ -> false }
+            val client = clientFor(server, scope, checkConnectionsAfter = 200.milliseconds)
+
+            client.getFolders()
+            delay(400.milliseconds)
+            client.getFolders()
+
+            log.commands.map { it.second } shouldContainExactly listOf("LOGIN", "LIST", "NOOP", "LIST")
+            log.connections.get() shouldBe 1
+            client.close()
+            server.close()
+        }
+    }
+
+    test("a connection used within the threshold gets no NOOP") {
+        withServerScope { scope ->
+            val log = PoolServerLog()
+            val server = scope.startPoolServer(log) { _, _ -> false }
+            val client = clientFor(server, scope, checkConnectionsAfter = 10.seconds)
+
+            repeat(3) { client.getFolders() }
+
+            log.commands.map { it.second } shouldContainExactly listOf("LOGIN", "LIST", "LIST", "LIST")
+            client.close()
+            server.close()
+        }
+    }
+
+    test("a folder checks its quiet connections too") {
+        withServerScope { scope ->
+            val log = PoolServerLog()
+            // The folder's first connection stops answering after its SELECT and first SEARCH.
+            val server = scope.startPoolServer(log) { connection, commands -> connection == 1 && commands > 3 }
+            val client = clientFor(
+                server, scope,
+                readTimeout = 20.seconds,
+                checkConnectionsAfter = 200.milliseconds,
+                connectionCheckTimeout = 300.milliseconds,
+            )
+            val folder = ImapFolder(client, listOf("INBOX"), "/", null)
+
+            folder.getMailIds() shouldContainExactly listOf(1)
+            delay(400.milliseconds)
+            folder.getMailIds() shouldContainExactly listOf(1)
+
+            log.commands.filter { it.first == 1 }.map { it.second } shouldContainExactly
+                    listOf("LOGIN", "SELECT", "SEARCH", "NOOP")
+            log.commands.filter { it.first == 2 }.map { it.second } shouldContainExactly
+                    listOf("LOGIN", "SELECT", "SEARCH")
+            client.close()
+            server.close()
+        }
+    }
 })
+
+/** What the clients did on a server started with [startPoolServer]. */
+private class PoolServerLog {
+    /** Every command by the number of its connection, starting at 1, and its first word. */
+    val commands = CopyOnWriteArrayList<Pair<Int, String>>()
+    val connections = AtomicInteger()
+}
+
+/**
+ * A server with one folder holding one mail. Stops answering on a connection once [isSilent]
+ * says so for the connection and the number of commands it has received, but keeps reading what
+ * comes in, as a peer that is gone without a FIN looks to the client.
+ */
+private suspend fun CoroutineScope.startPoolServer(
+    log: PoolServerLog,
+    isSilent: (connection: Int, commands: Int) -> Boolean,
+): ServerSocket = startScriptedServer { input, output ->
+    val connection = log.connections.incrementAndGet()
+    var commands = 0
+    while (true) {
+        val line = input.readLine() ?: break
+        val tag = line.substringBefore(' ')
+        val command = line.substringAfter(' ').substringBefore(' ')
+        log.commands += connection to command
+        if (isSilent(connection, ++commands)) continue
+        when (command) {
+            "LIST" -> output.writeStringUtf8("* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n")
+            "SELECT" -> output.writeStringUtf8("* 1 EXISTS\r\n* OK [UIDVALIDITY 1] UIDs valid\r\n")
+            "SEARCH" -> output.writeStringUtf8("* SEARCH 1\r\n")
+        }
+        output.writeStringUtf8("$tag OK completed\r\n")
+    }
+}
 
 private fun selectingThreads() = Thread.getAllStackTraces().values.count { stack ->
     stack.any { it.className.endsWith("SelectorImpl") && it.methodName == "doSelect" }

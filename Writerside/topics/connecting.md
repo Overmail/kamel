@@ -33,6 +33,16 @@ the command throws an [`ImapConnectionClosedException`](error-handling.md#closed
 two reads, not the duration of a command, so a large download is not cut off. `Duration.INFINITE` waits forever.
 It does not apply while [idling](idle.md).
 
+`checkConnectionsAfter` (default: `60.seconds`)
+: How long a pooled connection may go without a command before it is checked with a `NOOP` the next time it is
+handed out. A NAT or a firewall drops a quiet connection without telling either side, and a command on it would
+only fail after `readTimeout`. A connection used more recently costs no extra round trip. `Duration.INFINITE`
+never checks. See [](connection-pooling.md#checks).
+
+`connectionCheckTimeout` (default: `5.seconds`)
+: How long the server gets to answer that `NOOP`. A connection that does not answer in time is closed and replaced,
+and the command runs on the replacement.
+
 `debug` (default: `false`)
 : Prints the IMAP conversation to standard output, see [](logging-and-debugging.md#debug).
 
