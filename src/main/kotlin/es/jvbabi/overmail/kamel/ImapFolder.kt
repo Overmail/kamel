@@ -27,7 +27,11 @@ class ImapFolder(
             freshSelect = select(path.joinToString(delimiter))
         }
     },
-    name = "ImapFolder/${path.joinToString(delimiter)}"
+    name = "ImapFolder/${path.joinToString(delimiter)}",
+    // The connections of a folder go quiet just like those of the client, more so even: they sit
+    // between two passes of an importer while the IDLE on the side reports the change.
+    checkConnectionsAfter = imapClient.checkConnectionsAfter,
+    connectionCheckTimeout = imapClient.connectionCheckTimeout,
 ), MailFolder {
     override val fullName = this@ImapFolder.path.joinToString(delimiter)
     override val name = path.lastOrNull() ?: fullName

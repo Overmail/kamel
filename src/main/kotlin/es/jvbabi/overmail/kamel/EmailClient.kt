@@ -19,6 +19,8 @@ import kotlin.io.encoding.Base64
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 class ImapClient(
     val host: String,
@@ -38,15 +40,32 @@ class ImapClient(
      * [Duration.INFINITE] waits forever.
      */
     val readTimeout: Duration = 60.seconds,
+    /**
+     * How long a pooled connection may go without a command before it is checked with a `NOOP`
+     * the next time it is handed out. A NAT or a firewall drops a quiet connection without telling
+     * either side, and a command on it would only fail after [readTimeout]. A connection used more
+     * recently costs no extra round trip. [Duration.INFINITE] never checks.
+     */
+    val checkConnectionsAfter: Duration = 60.seconds,
+    /**
+     * How long the server gets to answer that `NOOP`. A connection that does not answer in time is
+     * closed and replaced, and the command runs on the replacement.
+     */
+    val connectionCheckTimeout: Duration = 5.seconds,
 ): ClosableClientPool(
     maxPoolSize = maxConnections,
+    checkConnectionsAfter = checkConnectionsAfter,
+    connectionCheckTimeout = connectionCheckTimeout,
     factory = {
         // One per connection, closed with it: a selector manager only lets go of its selector once
         // it is closed, and one that was left open kept a Dispatchers.IO thread spinning in
         // select() after its socket was gone. Enough of them starved every IO coroutine.
         val selectorManager = SelectorManager(coroutineScope.coroutineContext)
         val instance = try {
-            val tcpSocket = aSocket(selectorManager).tcp().connect(host, port)
+            // Lets the kernel notice a connection that died silently, which the NOOP of the pool
+            // only does when the connection is handed out. Without tuning the system that takes
+            // hours, so it is a supplement and not what replaces a dead connection in time.
+            val tcpSocket = aSocket(selectorManager).tcp().connect(host, port) { keepAlive = true }
             val socket = try {
                 if (ssl) tcpSocket.tls(coroutineScope.coroutineContext) else tcpSocket
             } catch (e: Throwable) {
@@ -146,6 +165,8 @@ data class SocketInstance(
     private val selectorManager: SelectorManager? = null,
     /** See [ImapClient.readTimeout]. */
     private val readTimeout: Duration = Duration.INFINITE,
+    /** How long the server gets to complete an `IDLE` after `DONE`, see [idle]. */
+    private val doneTimeout: Duration = DONE_TIMEOUT,
 ) : AutoCloseable {
 
     private val id = System.currentTimeMillis()
@@ -163,11 +184,51 @@ data class SocketInstance(
     @Volatile
     internal var freshSelect: SelectResponseParser? = null
 
+    /**
+     * When the server last completed a command on this connection, or when it was opened: how
+     * long it has been since the connection was last seen working, see [isQuietFor].
+     */
+    @Volatile
+    private var lastCompletion: TimeMark = TimeSource.Monotonic.markNow()
+
     /** Whether the server greeting was read; it precedes the response to the first command. */
     private var isGreeted = false
 
     /** Whether this instance can still carry a command, see [ClosableClientPool.getClient]. */
     internal val isAlive: Boolean get() = !isClosed && !input.isClosedForRead
+
+    /** Whether no command completed on this connection for [duration]. */
+    internal fun isQuietFor(duration: Duration): Boolean = lastCompletion.elapsedNow() > duration
+
+    /**
+     * Takes [commandMutex] for [checkClaimed] if it is free. Does not suspend, so the pool can do it
+     * under its own lock: a connection is claimed and taken off the free ones in one step, and no
+     * second caller gets it handed out while it is being checked.
+     */
+    internal fun tryClaimForCheck(): Boolean = commandMutex.tryLock(CHECK_OWNER)
+
+    /**
+     * Sends a `NOOP` on a connection [tryClaimForCheck] claimed and releases it again. Whether the
+     * server completed it within [timeout]; one that did not is closed.
+     *
+     * The `NOOP` drops [freshSelect] like any other command. Only a connection that has been quiet
+     * for a while is checked, and what its `SELECT` once answered is no longer the state of the
+     * folder anyway.
+     */
+    internal suspend fun checkClaimed(timeout: Duration): Boolean = try {
+        val response = send("NOOP")
+        while (response.line(timeout) != null) { }
+        true
+    } catch (e: Exception) {
+        // Silent, gone, or cancelled halfway through the answer: in each case nobody can tell what
+        // is left on the socket. And a server that refuses a NOOP is not one to send the next
+        // command to either.
+        close()
+        if (e is CancellationException) throw e
+        false
+    } finally {
+        commandMutex.unlock(CHECK_OWNER)
+    }
 
     /**
      * Sends [command] and lets [block] read its response. Whatever [block] left unread is read
@@ -222,7 +283,10 @@ data class SocketInstance(
      * cancelled or [onLine] throws. Either way the idling is ended with `DONE` and its completion
      * awaited, so the connection can carry the next command, the next `IDLE` included.
      *
-     * [readTimeout] does not apply while idling: a quiet folder is what an `IDLE` waits on.
+     * [readTimeout] does not apply while idling: a quiet folder is what an `IDLE` waits on. The
+     * completion of `DONE` is only waited for [doneTimeout], or [readTimeout] if that is shorter:
+     * a healthy server answers it at once, and a connection that died while idling would otherwise
+     * be held for the whole [readTimeout] before the caller learns of it.
      *
      * @see <a href="https://www.rfc-editor.org/rfc/rfc2177">RFC 2177 - IMAP4 IDLE command</a>
      */
@@ -241,8 +305,7 @@ data class SocketInstance(
                     write("DONE")
                     // A line the cancellation interrupted may be lost, which does not matter here:
                     // only the tagged completion is looked for.
-                    val timeout = if (readTimeout.isFinite()) readTimeout else DONE_TIMEOUT
-                    while (response.line(timeout) != null) { }
+                    while (response.line(minOf(doneTimeout, readTimeout)) != null) { }
                 } catch (_: Exception) {
                     close()
                 }
@@ -410,15 +473,20 @@ data class SocketInstance(
             // NO and BAD complete the command just like OK does.
             return when (TaggedResponseParser.parse(line, tag)) {
                 ImapStatus.OK -> {
-                    isComplete = true
+                    complete()
                     null
                 }
                 ImapStatus.NO, ImapStatus.BAD -> {
-                    isComplete = true
+                    complete()
                     throw ImapCommandException(message, line)
                 }
                 null -> line
             }
+        }
+
+        private fun complete() {
+            isComplete = true
+            lastCompletion = TimeSource.Monotonic.markNow()
         }
 
         /** Answers a continuation request (`+`) of the server. */
@@ -494,7 +562,16 @@ data class SocketInstance(
         /** How long the rest of a response nobody wants any more is read before the connection is given up. */
         private val SKIP_TIMEOUT = 200.milliseconds
 
-        /** How long a server gets to complete an `IDLE` after `DONE` if there is no [readTimeout]. */
-        private val DONE_TIMEOUT = 30.seconds
+        /**
+         * How long a server gets to complete an `IDLE` after `DONE`. Long enough for a slow server
+         * that is still there, short enough not to hold on to one that is not.
+         */
+        internal val DONE_TIMEOUT = 10.seconds
+
+        /**
+         * Holds [commandMutex] while the pool checks the connection. Not a [Job], so [isHeldBy]
+         * never takes a check for a command of its caller.
+         */
+        private val CHECK_OWNER = Any()
     }
 }
