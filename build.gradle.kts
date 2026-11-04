@@ -16,7 +16,8 @@ repositories {
 }
 
 dependencies {
-    implementation(libs.kotlinx.datetime)
+    // api: LocalDate and TimeZone are part of the search API.
+    api(libs.kotlinx.datetime)
     implementation(libs.ktor.network)
     implementation(libs.ktor.network.tls)
     implementation(libs.kotlin.stdlib)

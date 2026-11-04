@@ -24,6 +24,7 @@
         <toc-element topic="authentication.md"/>
         <toc-element topic="folders.md"/>
         <toc-element topic="fetching-messages.md"/>
+        <toc-element topic="searching-messages.md"/>
         <toc-element topic="message-fields.md"/>
         <toc-element topic="message-content.md"/>
         <toc-element topic="idle.md"/>

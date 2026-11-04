@@ -16,8 +16,8 @@ reliable. Until then, pin the version you use and test upgrades against your mai
 - **Reading only.** There is no way to change flags, move, copy, delete or append messages, or to create, rename
   and delete folders.
 - **IMAP only.** Sending mail (SMTP) and POP3 are not part of the library.
-- **No search.** Messages are selected by sequence number, range or UID. Searching by sender, date or text on the
-  server is not available.
+- **A small search.** [`search { }`](searching-messages.md) knows the subject, any header and the dates. There is no
+  search by sender, recipient, flags, size or the text of the body yet, and no `ESEARCH`.
 
 ## Connecting
 

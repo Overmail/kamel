@@ -8,11 +8,16 @@ import es.jvbabi.overmail.kamel.IdleEvent
 import es.jvbabi.overmail.kamel.IdleFolder
 import es.jvbabi.overmail.kamel.ImapFolder
 import es.jvbabi.overmail.kamel.MailFolder
+import es.jvbabi.overmail.kamel.SearchCriterion
+import es.jvbabi.overmail.kamel.SearchRequest
 import es.jvbabi.overmail.kamel.UnreadableMail
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.datetime.TimeZone
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /**
  * A folder whose mails live in memory. It hands out UIDs and sequence numbers the way a server
@@ -26,15 +31,27 @@ class InMemoryMailFolder(
     override val delimiter: String = "/",
     override val specialType: ImapFolder.SpecialType? = null,
     uidValidity: Long = 1,
+    /**
+     * The time zone of the server, which decides on which day a mail arrived for
+     * [SearchCriterion.ReceivedOn] and the like.
+     */
+    val timeZone: TimeZone = TimeZone.UTC,
 ) : MailFolder {
 
     /** @param source `null` for a mail the folder reports as unreadable, see [addUnreadable] */
-    private class Stored(val uid: Long, val source: ByteArray?, val flags: Set<Email.Flag>, val cause: Exception?)
+    private class Stored(
+        val uid: Long,
+        val source: ByteArray?,
+        val flags: Set<Email.Flag>,
+        val cause: Exception?,
+        val receivedAt: Instant,
+    )
 
     private val lock = Any()
     private val mails = mutableListOf<Stored>()
     private var nextUid = 1L
     private val fetchList = mutableListOf<Selection>()
+    private val searchList = mutableListOf<SearchCriterion>()
     private val changes = MutableSharedFlow<IdleEvent>(extraBufferCapacity = Int.MAX_VALUE)
 
     /** See [FolderState.uidValidity]. Changed by [resetUids]. */
@@ -42,7 +59,7 @@ class InMemoryMailFolder(
         private set
 
     /**
-     * If set, [state], [status] and collecting [getMails] throw it instead of answering. Set it to
+     * If set, [state], [status], [search] and collecting [getMails] throw it instead of answering. Set it to
      * an `ImapConnectionClosedException` to play a connection that is gone.
      */
     @Volatile
@@ -58,33 +75,56 @@ class InMemoryMailFolder(
     val fetches: List<Selection> get() = synchronized(lock) { fetchList.toList() }
 
     /**
+     * The criteria of every [search] so far, in that order. Tells whether the code under test
+     * searched the server or fetched to compare on its own.
+     */
+    val searches: List<SearchCriterion> get() = synchronized(lock) { searchList.toList() }
+
+    /**
      * Puts a mail into the folder and returns the UID it got. Watchers are told about it.
      *
      * @param source the message source, headers and body, as in an `.eml` file
      * @param uid the UID to give the mail, which has to be above every UID handed out before.
      * Leave it out to get the next one
+     * @param receivedAt when the mail arrived, the internal date a search by
+     * [SearchCriterion.ReceivedOn] and the like looks at
      */
-    fun add(source: ByteArray, flags: Set<Email.Flag> = emptySet(), uid: Long? = null): Long =
-        store(source, flags, uid, null)
+    fun add(
+        source: ByteArray,
+        flags: Set<Email.Flag> = emptySet(),
+        uid: Long? = null,
+        receivedAt: Instant = Clock.System.now(),
+    ): Long = store(source, flags, uid, null, receivedAt)
 
     /** [add] for a message source written as a string. */
-    fun add(source: String, flags: Set<Email.Flag> = emptySet(), uid: Long? = null): Long =
-        add(source.toByteArray(Charsets.UTF_8), flags, uid)
+    fun add(
+        source: String,
+        flags: Set<Email.Flag> = emptySet(),
+        uid: Long? = null,
+        receivedAt: Instant = Clock.System.now(),
+    ): Long = add(source.toByteArray(Charsets.UTF_8), flags, uid, receivedAt)
 
     /**
      * Puts a mail into the folder that a fetch cannot read, as one whose response Kamel fails to
-     * parse: it goes to `onUnreadable` of the request, or fails the fetch with [cause].
+     * parse: it goes to `onUnreadable` of the request, or fails the fetch with [cause]. A
+     * [search] never finds it.
      */
     fun addUnreadable(
         cause: Exception = IllegalArgumentException("Could not parse FETCH response"),
         uid: Long? = null,
-    ): Long = store(null, emptySet(), uid, cause)
+    ): Long = store(null, emptySet(), uid, cause, Clock.System.now())
 
-    private fun store(source: ByteArray?, flags: Set<Email.Flag>, uid: Long?, cause: Exception?): Long = synchronized(lock) {
+    private fun store(
+        source: ByteArray?,
+        flags: Set<Email.Flag>,
+        uid: Long?,
+        cause: Exception?,
+        receivedAt: Instant,
+    ): Long = synchronized(lock) {
         val assigned = uid ?: nextUid
         require(assigned >= nextUid) { "UIDs only grow: $assigned was asked for, the next one is $nextUid" }
         nextUid = assigned + 1
-        mails += Stored(assigned, source, flags, cause)
+        mails += Stored(assigned, source, flags, cause, receivedAt)
         report(IdleEvent.NewMessage(mails.size.toLong()))
         assigned
     }
@@ -119,7 +159,7 @@ class InMemoryMailFolder(
         synchronized(lock) {
             val index = indexOf(uid)
             val mail = mails[index]
-            mails[index] = Stored(mail.uid, mail.source, flags, mail.cause)
+            mails[index] = Stored(mail.uid, mail.source, flags, mail.cause, mail.receivedAt)
             report(IdleEvent.FlagsChanged(index + 1L, flags.toList()))
         }
     }
@@ -131,7 +171,9 @@ class InMemoryMailFolder(
     fun resetUids(uidValidity: Long = this.uidValidity + 1) {
         synchronized(lock) {
             this.uidValidity = uidValidity
-            val renumbered = mails.mapIndexed { index, mail -> Stored(index + 1L, mail.source, mail.flags, mail.cause) }
+            val renumbered = mails.mapIndexed { index, mail ->
+                Stored(index + 1L, mail.source, mail.flags, mail.cause, mail.receivedAt)
+            }
             mails.clear()
             mails += renumbered
             nextUid = mails.size + 1L
@@ -185,6 +227,22 @@ class InMemoryMailFolder(
                 )
             }
         }
+    }
+
+    /**
+     * Returns the UIDs of the mails [criteria] describes, lowest first, decided as
+     * [SearchCriterion.matches] decides it. Mails added with [addUnreadable] are never found.
+     */
+    override suspend fun search(criteria: SearchRequest.() -> Unit): List<Long> {
+        val criterion = SearchRequest().apply(criteria).criterion
+        failure?.let { throw it }
+        val snapshot = synchronized(lock) {
+            searchList += criterion
+            mails.toList()
+        }
+        return snapshot
+            .filter { it.source != null && criterion.matches(it.source, it.receivedAt, timeZone) }
+            .map { it.uid }
     }
 
     /**

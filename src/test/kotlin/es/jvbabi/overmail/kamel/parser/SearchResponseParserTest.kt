@@ -6,30 +6,34 @@ import io.kotest.matchers.shouldBe
 class SearchResponseParserTest : FunSpec({
 
     test("parses a list of ids") {
-        SearchResponseParser.parseIds("* SEARCH 1 2 3") shouldBe listOf(1, 2, 3)
+        SearchResponseParser.parse("* SEARCH 1 2 3") shouldBe listOf(1L, 2L, 3L)
     }
 
     test("parses a single id") {
-        SearchResponseParser.parseIds("* SEARCH 42") shouldBe listOf(42)
+        SearchResponseParser.parse("* SEARCH 42") shouldBe listOf(42L)
     }
 
     test("parses an empty result") {
-        SearchResponseParser.parseIds("* SEARCH") shouldBe emptyList()
+        SearchResponseParser.parse("* SEARCH") shouldBe emptyList()
     }
 
     test("ignores the case of the response") {
-        SearchResponseParser.parseIds("* search 7") shouldBe listOf(7)
+        SearchResponseParser.parse("* search 7") shouldBe listOf(7L)
     }
 
     test("skips tokens that are not numbers") {
-        SearchResponseParser.parseIds("* SEARCH 1 abc 3") shouldBe listOf(1, 3)
+        SearchResponseParser.parse("* SEARCH 1 abc 3") shouldBe listOf(1L, 3L)
+    }
+
+    test("parses UIDs above the range of an Int") {
+        SearchResponseParser.parse("* SEARCH 4294967295") shouldBe listOf(4294967295L)
     }
 
     test("returns null for the tagged completion line") {
-        SearchResponseParser.parseIds("A001 OK SEARCH completed") shouldBe null
+        SearchResponseParser.parse("A001 OK SEARCH completed") shouldBe null
     }
 
     test("returns null for an unrelated untagged response") {
-        SearchResponseParser.parseIds("* 3 EXISTS") shouldBe null
+        SearchResponseParser.parse("* 3 EXISTS") shouldBe null
     }
 })

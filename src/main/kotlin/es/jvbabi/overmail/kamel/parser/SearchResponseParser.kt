@@ -10,13 +10,14 @@ import es.jvbabi.overmail.kamel.util.substringAfterIgnoreCase
 internal object SearchResponseParser {
 
     /**
-     * Returns the message ids contained in [line], or `null` if [line] is not an untagged SEARCH response.
+     * Returns the numbers contained in [line], or `null` if [line] is not an untagged SEARCH response.
+     * Sequence numbers for `SEARCH`, UIDs for `UID SEARCH`: a UID can be above [Int.MAX_VALUE].
      */
-    fun parseIds(line: String): List<Int>? {
+    fun parse(line: String): List<Long>? {
         if (!line.uppercase().startsWith("* SEARCH")) return null
         return line
             .substringAfterIgnoreCase("* SEARCH ")
             .split(" ")
-            .mapNotNull { it.toIntOrNull() }
+            .mapNotNull { it.toLongOrNull() }
     }
 }

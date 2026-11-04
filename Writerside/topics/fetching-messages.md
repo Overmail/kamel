@@ -88,6 +88,14 @@ inbox.getMails {
 
 If nothing arrived, the flow is empty. Check [`uidValidity`](folders.md#state) before you trust stored UIDs.
 
+### Fetching what a search found {id="search"}
+
+[`search { }`](searching-messages.md) returns UIDs, which `uids(...)` takes as they are:
+
+```kotlin
+inbox.getMails { uids(inbox.search { messageId("<x@example.org>") }); all() }
+```
+
 ## Which fields {id="fields"}
 
 | Property | Fetches | Fills |
