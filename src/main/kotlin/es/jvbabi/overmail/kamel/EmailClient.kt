@@ -238,7 +238,14 @@ data class SocketInstance(
      * @throws ImapConnectionClosedException if the connection ended or stayed silent for
      * [readTimeout] before the tagged completion
      */
-    internal suspend fun <T> execute(command: String, block: suspend Response.() -> T): T = commandMutex.withLock(owner()) {
+    internal suspend fun <T> execute(command: String, block: suspend Response.() -> T): T =
+        execute(ImapCommand.of(command), block)
+
+    /**
+     * [execute] for a command that carries literals. Each one is sent once the server asked for it;
+     * a server that refuses one instead completes the command with `NO` or `BAD`.
+     */
+    internal suspend fun <T> execute(command: ImapCommand, block: suspend Response.() -> T): T = commandMutex.withLock(owner()) {
         val response = send(command)
         try {
             val result = response.block()
@@ -318,16 +325,33 @@ data class SocketInstance(
      * Writes [command] under a new tag. Has to be called with [commandMutex] held, and its
      * [Response] read to the end before the mutex is released.
      */
-    private suspend fun send(command: String): Response {
+    private suspend fun send(command: String): Response = send(ImapCommand.of(command))
+
+    /** [send] for a command that carries literals, see [execute]. */
+    private suspend fun send(command: ImapCommand): Response {
         // Before awaiting the greeting: a socket closed while waiting for one never gets it.
         if (isClosed) throw ImapConnectionClosedException("The connection is closed, cannot run $command")
         freshSelect = null
         try {
             awaitGreeting()
             val tag = "A${(lastCommandId++).toString().padStart(3, '0')}"
-            val message = "$tag $command"
-            write(message)
-            return Response(tag, message)
+            val response = Response(tag, "$tag $command")
+            val line = StringBuilder("$tag ")
+            for (part in command.parts) when (part) {
+                is ImapCommand.Part.Text -> line.append(part.text)
+                is ImapCommand.Part.Literal -> {
+                    write("$line{${part.bytes.size}}")
+                    line.clear()
+                    // Completed without asking for the literal: nothing more to send.
+                    if (!response.awaitContinuation()) return response
+                    writeBytes(part.bytes)
+                }
+            }
+            write(line.toString())
+            return response
+        } catch (e: ImapCommandException) {
+            // The server refused a literal and completed the command: the connection is fine.
+            throw e
         } catch (e: Throwable) {
             // Cancelled or failed with the greeting half read or the command half written: the
             // server may still answer a command nobody is going to read the response of.
@@ -358,6 +382,16 @@ data class SocketInstance(
             if (line.startsWith("* OK")) break
         }
         isGreeted = true
+    }
+
+    /** Writes the bytes of a literal, which are not followed by a line break of their own. */
+    private suspend fun writeBytes(bytes: ByteArray) {
+        try {
+            this.output.writeByteArray(bytes)
+        } catch (e: IOException) {
+            throw closed("The connection closed while sending a command", e)
+        }
+        if (isDebug) println("SI $id > <literal of ${bytes.size} bytes>")
     }
 
     private suspend fun write(line: String) {
@@ -487,6 +521,20 @@ data class SocketInstance(
         private fun complete() {
             isComplete = true
             lastCompletion = TimeSource.Monotonic.markNow()
+        }
+
+        /**
+         * Reads up to the continuation (`+`) the server asks for a literal with. `false` if the
+         * command completed with `OK` instead.
+         *
+         * @throws ImapCommandException if the server refused the command, literal and all
+         */
+        suspend fun awaitContinuation(): Boolean {
+            while (true) {
+                val line = line() ?: return false
+                // Untagged data the server sends in between, an EXISTS for example, is not asked for.
+                if (line.startsWith("+")) return true
+            }
         }
 
         /** Answers a continuation request (`+`) of the server. */

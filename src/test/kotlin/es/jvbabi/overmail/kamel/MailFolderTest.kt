@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
+import kotlin.time.Instant
 
 /**
  * A folder that never saw a server: the mails are parsed from their source and kept in a list.
@@ -39,6 +40,12 @@ private class MemoryFolder(
             }
             if (isSelected) emit(mail)
         }
+    }
+
+    /** As a folder of your own decides it: with [SearchCriterion.matches] on the source of each mail. */
+    override suspend fun search(criteria: SearchRequest.() -> Unit): List<Long> {
+        val criterion = SearchRequest().apply(criteria).criterion
+        return mails.filter { criterion.matches(checkNotNull(it.source), Instant.DISTANT_PAST) }.map { it.uid.await() }
     }
 
     override fun getIdleFolder() = object : IdleFolder {
@@ -82,6 +89,10 @@ class MailFolderTest : FunSpec({
     test("a folder kept in memory answers what a server would") {
         newSubjects(MemoryClient(listOf(inbox)), "Archive/2025", knownUid = 4) shouldContainExactly listOf("Second", "Third")
         newSubjects(MemoryClient(listOf(inbox)), "Archive/2025", knownUid = 12) shouldContainExactly emptyList()
+    }
+
+    test("a folder of its own searches with the criteria of the request") {
+        inbox.search { or { subject("first"); subject("third") } } shouldContainExactly listOf(4L, 12L)
     }
 
     test("its names follow from its path") {

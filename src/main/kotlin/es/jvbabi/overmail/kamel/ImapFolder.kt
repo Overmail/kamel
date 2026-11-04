@@ -6,6 +6,7 @@ import es.jvbabi.overmail.kamel.parser.SearchResponseParser
 import es.jvbabi.overmail.kamel.parser.SelectResponseParser
 import es.jvbabi.overmail.kamel.parser.StatusResponseParser
 import es.jvbabi.overmail.kamel.parser.buildFetchCommands
+import es.jvbabi.overmail.kamel.parser.buildSearchCommand
 import es.jvbabi.overmail.kamel.parser.fetchResponseUid
 import es.jvbabi.overmail.kamel.util.Optional
 import es.jvbabi.overmail.kamel.util.quoteImap
@@ -88,19 +89,32 @@ class ImapFolder(
      * Returns the sequence numbers of all mails in this folder. They are positions, starting at 1,
      * and change when a mail is removed.
      */
-    suspend fun getMailIds(): List<Int> = search("SEARCH ALL")
+    suspend fun getMailIds(): List<Int> = search(ImapCommand.of("SEARCH ALL")).map { it.toInt() }
 
-    suspend fun getIdByUid(uid: Long): Int? = search("SEARCH UID $uid").firstOrNull()
+    suspend fun getIdByUid(uid: Long): Int? = search(ImapCommand.of("SEARCH UID $uid")).firstOrNull()?.toInt()
 
-    private suspend fun search(command: String): List<Int> = getClient().execute(command) {
-        val ids = mutableListOf<Int>()
+    /**
+     * Asks the server with a `UID SEARCH` for the mails [criteria] describes. No mail is fetched
+     * for it.
+     *
+     * A string that is not ASCII is sent as a literal, under `CHARSET UTF-8`. A server that does
+     * not know that charset refuses the search.
+     *
+     * @throws ImapCommandException if the server refused the search
+     */
+    override suspend fun search(criteria: SearchRequest.() -> Unit): List<Long> =
+        search(buildSearchCommand(SearchRequest().apply(criteria).criterion)).distinct().sorted()
+
+    private suspend fun search(command: ImapCommand): List<Long> = getClient().execute(command) {
+        val numbers = mutableListOf<Long>()
         while (true) {
             val line = next()?.first() ?: break
-            val parsed = SearchResponseParser.parseIds(line)
-            if (parsed != null) ids.addAll(parsed)
-            else logger.error("Unexpected response to $command: $line")
+            val parsed = SearchResponseParser.parse(line)
+            if (parsed != null) numbers.addAll(parsed)
+            // A server may report anything in between, a new EXISTS for example.
+            else logger.debug("Unexpected response to $command: $line")
         }
-        ids
+        numbers
     }
 
     /**

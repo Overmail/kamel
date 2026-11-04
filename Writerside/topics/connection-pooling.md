@@ -12,7 +12,7 @@ size is limited by `maxConnections` of [`ImapClient`](connecting.md), `500` by d
 
 Folder pool
 : Every `ImapFolder` has its own pool of up to **five** connections. Each of them has that folder selected. Used
-for `state()`, `getMailIds()`, `getIdByUid()`, `getMails { }` and message content.
+for `state()`, `getMailIds()`, `getIdByUid()`, `search { }`, `getMails { }` and message content.
 
 An [`IdleFolder`](idle.md) takes one more connection of its folder and keeps it for itself.
 

@@ -11,7 +11,7 @@ interfaces, and ships mailboxes that live in memory in a second artifact, `kamel
 | Interface | Members |
 |-----------|---------|
 | `MailClient` | `getFolders()` |
-| `MailFolder` | `path`, `delimiter`, `specialType`, `fullName`, `name`, `state()`, `status()`, `getMails { }`, `getIdleFolder()` |
+| `MailFolder` | `path`, `delimiter`, `specialType`, `fullName`, `name`, `state()`, `status()`, `getMails { }`, `search { }`, `getIdleFolder()` |
 | `IdleFolder` | `events()`, `idle { }`, `close()` |
 
 Write the code you want to test against the interfaces:
@@ -55,7 +55,7 @@ sequence numbers move up when a mail is removed.
 
 | Function | Effect |
 |----------|--------|
-| `add(source, flags, uid)` | Puts a mail into the folder. Without `uid`, it gets the next one |
+| `add(source, flags, uid, receivedAt)` | Puts a mail into the folder. Without `uid`, it gets the next one; without `receivedAt`, it arrived now |
 | `addUnreadable(cause)` | Puts a mail into the folder that a fetch [cannot read](fetching-messages.md#unreadable) |
 | `remove(uid)` | Removes a mail |
 | `setFlags(uid, flags)` | Replaces the flags of a mail |
@@ -79,13 +79,32 @@ importNewMails(client, lastKnownUid = 41)
 inbox.fetches shouldBe listOf(FetchRequest.Selection.UidRange(42, null))
 ```
 
+## Search {id="search"}
+
+`search { }` takes the [criteria of a real folder](searching-messages.md) and decides them on the message source,
+as a server would: strings are found ignoring case, `sentOn` reads the day of the `Date` header, `receivedOn` the
+day of `receivedAt` in the `timeZone` of the folder, UTC unless it is created with another one. Mails added with
+`addUnreadable` are never found.
+
+`searches` lists the criteria of every search, to make sure your code searched instead of fetching the folder:
+
+```kotlin
+val inbox = InMemoryMailFolder(listOf("INBOX"))
+inbox.add("Subject: Lunch\r\nMessage-ID: <x@example.org>\r\n\r\nAt one?\r\n")
+
+reimport(inbox, messageId = "<x@example.org>")
+
+inbox.searches shouldBe listOf(SearchCriterion.Header("Message-ID", "<x@example.org>"))
+inbox.fetches shouldBe listOf(FetchRequest.Selection.Uids(setOf(1)))
+```
+
 ## Play failures {id="failures"}
 
 Set `failure` on a folder or on the client to make it throw instead of answering:
 
 ```kotlin
 inbox.failure = ImapConnectionClosedException("The connection closed")
-// state(), status() and collecting getMails { } now throw
+// state(), status(), search { } and collecting getMails { } now throw
 
 inbox.failure = null
 ```
@@ -113,4 +132,5 @@ events.await() shouldBe listOf(IdleEvent.NewMessage(3))
 
 If the in-memory folder does not fit, implement `MailFolder` yourself. Read the selection of a request from
 `FetchRequest().apply(config).selection`, which is one of `Ids`, `IdRange`, `Uids` and `UidRange`. Report a mail
-you cannot deliver with `request.unreadable(...)`.
+you cannot deliver with `request.unreadable(...)`. For `search { }`, build the criterion with
+`SearchRequest().apply(criteria).criterion` and ask it with `matches(source, receivedAt)` whether a mail matches.

@@ -98,6 +98,17 @@ fun main() = runBlocking {
 Message fields are `Deferred` — only what you request in `getMails { }` is fetched, so `await()`
 returns immediately for those fields.
 
+To find messages without fetching the folder, search on the server. `search { }` returns UIDs:
+
+```kotlin
+val uids = inbox.search {
+    subject("Lunch")
+    sentOn(LocalDate(2025, 5, 5))
+    not { header("X-Spam-Flag", "YES") }
+}
+inbox.getMails { uids(uids); all() }.collect { println(it.subject.await()) }
+```
+
 ### Logging in with OAuth 2.0
 
 For providers that require OAuth (Gmail, Outlook/Microsoft 365), pass an access token instead of a

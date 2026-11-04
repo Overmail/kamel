@@ -6,6 +6,7 @@ import es.jvbabi.overmail.kamel.FolderState
 import es.jvbabi.overmail.kamel.IdleEvent
 import es.jvbabi.overmail.kamel.ImapConnectionClosedException
 import es.jvbabi.overmail.kamel.ImapFolder
+import es.jvbabi.overmail.kamel.SearchCriterion
 import es.jvbabi.overmail.kamel.UnreadableMail
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -21,6 +22,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.seconds
 
 private fun source(subject: String) = "From: ada@example.com\r\nSubject: $subject\r\n\r\nBody\r\n"
@@ -222,6 +226,80 @@ class InMemoryMailFolderTest : FunSpec({
                     IdleEvent.RemovedMessage(1),
                 )
             }
+        }
+    }
+
+    context("search") {
+        test("finds the mails the criteria describe, by UID") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.add(source("Lunch tomorrow?"))
+            val dinner = folder.add(source("Dinner tonight?"))
+            val lunch = folder.add(source("Re: lunch tomorrow?"))
+
+            folder.search { subject("LUNCH") } shouldContainExactly listOf(1L, lunch)
+            folder.search { not { subject("lunch") } } shouldContainExactly listOf(dinner)
+        }
+
+        test("finds every mail without criteria") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.add(source("First"))
+            folder.add(source("Second"))
+
+            folder.search { } shouldContainExactly listOf(1L, 2L)
+        }
+
+        test("finds a mail by its Message-ID and the day it was sent") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.add("Message-ID: <a@example.org>\r\nDate: Mon, 5 May 2025 14:03:12 +0200\r\nSubject: A\r\n\r\nBody\r\n")
+            val b = folder.add("Message-ID: <b@example.org>\r\nDate: Tue, 6 May 2025 09:00:00 +0200\r\nSubject: B\r\n\r\nBody\r\n")
+
+            folder.search { messageId("b@example.org") } shouldContainExactly listOf(b)
+            folder.search { sentSince(LocalDate(2025, 5, 6)) } shouldContainExactly listOf(b)
+            folder.search {
+                or {
+                    sentOn(LocalDate(2025, 5, 5))
+                    messageId("<b@example.org>")
+                }
+            } shouldContainExactly listOf(1L, b)
+        }
+
+        test("looks at the day a mail arrived in the time zone of the folder") {
+            val folder = InMemoryMailFolder(listOf("INBOX"), timeZone = TimeZone.of("Europe/Berlin"))
+            val late = folder.add(source("Late"), receivedAt = Instant.parse("2025-05-05T23:30:00Z"))
+            folder.add(source("Early"), receivedAt = Instant.parse("2025-05-05T08:00:00Z"))
+
+            folder.search { receivedOn(LocalDate(2025, 5, 6)) } shouldContainExactly listOf(late)
+        }
+
+        test("hands UIDs that getMails takes as they are") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.add(source("Lunch"))
+            folder.add(source("Dinner"))
+
+            val uids = folder.search { subject("Dinner") }
+            folder.getMails { uids(uids) }.map { it.subject.await() }.toList() shouldContainExactly listOf("Dinner")
+        }
+
+        test("never finds an unreadable mail") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.addUnreadable()
+            val readable = folder.add(source("Readable"))
+
+            folder.search { } shouldContainExactly listOf(readable)
+        }
+
+        test("remembers what was searched for") {
+            val folder = InMemoryMailFolder(listOf("INBOX"))
+            folder.search { subject("Lunch") }
+
+            folder.searches shouldContainExactly listOf(SearchCriterion.Subject("Lunch"))
+            folder.fetches.shouldBeEmpty()
+        }
+
+        test("fails like a folder that lost its connection") {
+            val folder = InMemoryMailFolder(listOf("INBOX")).apply { failure = ImapConnectionClosedException("gone") }
+
+            shouldThrow<ImapConnectionClosedException> { folder.search { } }
         }
     }
 })

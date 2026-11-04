@@ -39,5 +39,22 @@ interface MailFolder {
      */
     fun getMails(config: FetchRequest.() -> Unit): Flow<Email>
 
+    /**
+     * Searches the folder for the messages [criteria] describes and returns their UIDs, lowest
+     * first. Hand them to [getMails] with `uids(...)` to fetch them:
+     *
+     * ```
+     * val uids = folder.search {
+     *     subject("Lunch")
+     *     sentOn(LocalDate(2025, 5, 5))
+     * }
+     * folder.getMails { uids(uids); all() }
+     * ```
+     *
+     * Without any criterion, every message of the folder is found. See [SearchCriteria] for how
+     * strings and dates are matched.
+     */
+    suspend fun search(criteria: SearchRequest.() -> Unit): List<Long>
+
     fun getIdleFolder(): IdleFolder
 }

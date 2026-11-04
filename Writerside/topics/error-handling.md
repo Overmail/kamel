@@ -77,6 +77,7 @@ of your choice.
 |------|-----------|
 | `testConnection()`, `getFolders()` | Connection errors, `ImapCommandException` (login) |
 | `state()`, `status()`, `getMailIds()`, `getIdByUid()` | The above, `ImapCommandException` (select), `ImapConnectionClosedException` |
+| `search { }` | The above, `ImapCommandException` (search, e.g. `BADCHARSET`) |
 | Collecting `getMails { }` | The above, `ImapCommandException` (fetch), parse errors |
 | `getContent()`, `getRawContent()` | The above |
 | `idle { }`, collecting `events()` | Connection errors, `ImapCommandException`, `ImapConnectionClosedException` when the connection ends |
